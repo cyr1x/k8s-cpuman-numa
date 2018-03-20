@@ -259,6 +259,35 @@ func TestCPUManagerGenerate(t *testing.T) {
 			nodeAllocatableReservation: v1.ResourceList{v1.ResourceCPU: *resource.NewQuantity(0, resource.DecimalSI)},
 			expectedError:              fmt.Errorf("the static policy requires systemreserved.cpu + kubereserved.cpu to be greater than zero"),
 		},
+		{
+			description:                "telco policy",
+			cpuPolicyName:              "telco",
+			nodeAllocatableReservation: v1.ResourceList{v1.ResourceCPU: *resource.NewQuantity(3, resource.DecimalSI)},
+			expectedPolicy:             "telco",
+			skipIfPermissionsError:     true,
+		},
+		{
+			description:                "telco policy - broken topology",
+			cpuPolicyName:              "telco",
+			nodeAllocatableReservation: v1.ResourceList{},
+			isTopologyBroken:           true,
+			expectedError:              fmt.Errorf("could not detect number of cpus"),
+			skipIfPermissionsError:     true,
+		},
+		{
+			description:                "telco policy - broken reservation",
+			cpuPolicyName:              "telco",
+			nodeAllocatableReservation: v1.ResourceList{},
+			panicMsg:                   "unable to determine reserved CPU resources for telco policy",
+			skipIfPermissionsError:     true,
+		},
+		{
+			description:                "telco policy - no CPU resources",
+			cpuPolicyName:              "telco",
+			nodeAllocatableReservation: v1.ResourceList{v1.ResourceCPU: *resource.NewQuantity(0, resource.DecimalSI)},
+			panicMsg:                   "the telco policy requires systemreserved.cpu + kubereserved.cpu to be greater than zero",
+			skipIfPermissionsError:     true,
+		},
 	}
 
 	mockedMachineInfo := cadvisorapi.MachineInfo{

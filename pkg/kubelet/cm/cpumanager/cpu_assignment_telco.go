@@ -62,11 +62,11 @@ func (a *cpuAccumulator) freeSocketsTelco( socketIdPref int ) []int {
 // socketIdPref must be >= 0
 func (a *cpuAccumulator) freeCPUsTelco( socketIdPref int ) []int {
 	result := []int{}
-	
+
 	if socketIdPref >= 0 {
 		//get only cores in the prefered socket
 		cores := a.details.CoresInSocket(socketIdPref).ToSlice()
-	
+
 		//keep the same sort algorithm as static policy, but only with the cores of the prefered socket
 		sort.Slice(
 			cores,
@@ -125,13 +125,17 @@ func takeByTopologyTelco(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet
 	}
 
 	// Algorithm: topology-aware best-fit but with socket priority if socketIdPref >= 0
-	
+
 	// 1. Acquire whole sockets, if available and the container requires at
 	//    least a socket's-worth of CPUs.
 	for _, s := range acc.freeSocketsTelco( socketIdPref ) {
 		if acc.needs(acc.topo.CPUsPerSocket()) {
 			//glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming socket [%d]", s)
-			glog.Infof("[cpumanager] takeByTopologyTelco: claiming socket [%d]", s)
+			var msgpref = "non prefered"
+			if s == socketIdPref {
+				msgpref = "prefered"
+			}
+			glog.Infof("[cpumanager] takeByTopologyTelco: claiming %s socket [%d]", msgpref, s)
 			acc.take(acc.details.CPUsInSocket(s))
 			if acc.isSatisfied() {
 				return acc.result, nil
@@ -141,32 +145,31 @@ func takeByTopologyTelco(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet
 
 	// 2. Acquire whole cores on preferential socket
 	if socketIdPref >= 0 {
-	
-//TODO: afficher dans les logs le nombre de PU dispo dans la topo des sockets, et ce qu'il y a dans le détailcpu
 
+		//TODO: remove this debug messages
 		glog.Infof("[cpumanager] takeByTopologyTelco: [%d] free cores on socket [%d]", acc.details.CoresInSocket(socketIdPref).Filter(acc.isCoreFree).Size(), socketIdPref)
 		glog.Infof("[cpumanager] takeByTopologyTelco - Debug: cores in socket [%d] = %+v", socketIdPref, acc.details.CoresInSocket(socketIdPref) );
 		glog.Infof("[cpumanager] takeByTopologyTelco - Debug: free cores in socket [%d] = %+v", socketIdPref, acc.details.CoresInSocket(socketIdPref).Filter(acc.isCoreFree) );
-		
+
 		//Range free cores on this socket
 		for _, c := range acc.details.CoresInSocket(socketIdPref).Filter(acc.isCoreFree).ToSlice() {
 			if acc.needs(acc.topo.CPUsPerCore()) {
 				//glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming core [%d] on socket [%d]", c, socketIdPref)
-				glog.Infof("[cpumanager] takeByTopologyTelco: claiming core [%d] on socket [%d]", c, socketIdPref)
+				glog.Infof("[cpumanager] takeByTopologyTelco: claiming core [%d] on prefered socket [%d]", c, socketIdPref)
 				acc.take(acc.details.CPUsInCore(c))
 				if acc.isSatisfied() {
 					return acc.result, nil
 				}
 			}
 		}
-	}	
-	
-	// 3. Acquire whole cores, if no more core available on prefered socket and 
+	}
+
+	// 3. Acquire whole cores, if no more core available on prefered socket and
 	//    if available and the container requires at least a core's-worth of CPUs.
 	for _, c := range acc.freeCores() {
 		if acc.needs(acc.topo.CPUsPerCore()) {
 			//glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming core [%d]", c)
-			glog.Infof("[cpumanager] takeByTopologyTelco: claiming core [%d]", c)
+			glog.Infof("[cpumanager] takeByTopologyTelco: claiming core [%d] on non prefered socket", c)
 			acc.take(acc.details.CPUsInCore(c))
 			if acc.isSatisfied() {
 				return acc.result, nil
@@ -181,21 +184,21 @@ func takeByTopologyTelco(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet
 	for _, c := range acc.freeCPUsTelco(socketIdPref) {
 		if acc.needs(1) {
 			//glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming CPU [%d] on socket [%d]", c, socketIdPref)
-			glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming CPU [%d] on socket [%d]", c, socketIdPref)
+			glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming CPU [%d] on prefered socket [%d]", c, socketIdPref)
 			acc.take(cpuset.NewCPUSet(c))
 		}
 		if acc.isSatisfied() {
 			return acc.result, nil
 		}
 	}
-	
-	// 5. Acquire single threads, preferring to fill partially-allocated cores
+
+	// 5. Acquire single threads on another sockets, preferring to fill partially-allocated cores
 	//    on the same sockets as the whole cores we have already taken in this
 	//    allocation.
 	for _, c := range acc.freeCPUs() {
 		if acc.needs(1) {
 			//glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming CPU [%d]", c)
-			glog.Infof("[cpumanager] takeByTopologyTelco: claiming CPU [%d]", c)
+			glog.Infof("[cpumanager] takeByTopologyTelco: claiming CPU [%d] on non prefered socket", c)
 			acc.take(cpuset.NewCPUSet(c))
 		}
 		if acc.isSatisfied() {
@@ -205,5 +208,3 @@ func takeByTopologyTelco(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet
 
 	return cpuset.NewCPUSet(), fmt.Errorf("failed to allocate cpus")
 }
-
-

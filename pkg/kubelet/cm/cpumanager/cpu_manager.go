@@ -140,7 +140,7 @@ func NewManager(
 		numReservedCPUs := int(math.Ceil(reservedCPUsFloat))
 		policy = NewStaticPolicy(topo, numReservedCPUs)
 
-	case PolicyTelco:
+	case PolicyStaticNuma:
 		topo, err := topology.Discover(machineInfo)
 		if err != nil {
 			return nil, err
@@ -148,26 +148,26 @@ func NewManager(
 		glog.Infof("[cpumanager] detected CPU topology: %v", topo)
 		reservedCPUs, ok := nodeAllocatableReservation[v1.ResourceCPU]
 		if !ok {
-			// The telco policy cannot initialize without this information. Panic!
-			panic("[cpumanager] unable to determine reserved CPU resources for telco policy")
+			// The statuc numa policy cannot initialize without this information. Panic!
+			panic("[cpumanager] unable to determine reserved CPU resources for static numa policy")
 		}
 		if reservedCPUs.IsZero() {
 			// Panic!
 			//
-			// The telco policy requires this to be nonzero. Zero CPU reservation
+			// The static numa policy requires this to be nonzero. Zero CPU reservation
 			// would allow the shared pool to be completely exhausted. At that point
 			// either we would violate our guarantee of exclusivity or need to evict
 			// any pod that has at least one container that requires zero CPUs.
-			// See the comments in policy_telco.go for more details.
-			panic("[cpumanager] the telco policy requires systemreserved.cpu + kubereserved.cpu to be greater than zero")
+			// See the comments in policy_numa.go for more details.
+			panic("[cpumanager] the static numa policy requires systemreserved.cpu + kubereserved.cpu to be greater than zero")
 		}
 
 		// Take the ceiling of the reservation, since fractional CPUs cannot be
 		// exclusively allocated.
 		reservedCPUsFloat := float64(reservedCPUs.MilliValue()) / 1000
 		numReservedCPUs := int(math.Ceil(reservedCPUsFloat))
-		policy = NewTelcoPolicy(topo, numReservedCPUs)
-		
+		policy = NewStaticNumaPolicy(topo, numReservedCPUs)
+
 	default:
 		glog.Errorf("[cpumanager] Unknown policy \"%s\", falling back to default policy \"%s\"", cpuPolicyName, PolicyNone)
 		policy = NewNonePolicy()

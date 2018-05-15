@@ -28,15 +28,15 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpuset"
 )
 
-// PolicyTelco is the name of the telco policy
-const PolicyTelco policyName = "telco"
+// PolicyStaticNuma is the name of the telco policy
+const PolicyStaticNuma policyName = "static-numa"
 
 // Label for the prefered CPU
 const PreferredNUMANodeId = "PreferredNUMANodeId"
 
-var _ Policy = &telcoPolicy{}
+var _ Policy = &staticNumaPolicy{}
 
-// telcoPolicy is a CPU manager policy that does not change CPU
+// staticNumaPolicy is a CPU manager policy that does not change CPU
 // assignments for exclusively pinned guaranteed containers after the main
 // container process starts.
 //
@@ -46,7 +46,7 @@ var _ Policy = &telcoPolicy{}
 // - The pod QoS class is Guaranteed.
 // - The CPU request is a positive integer.
 //
-// The telco policy maintains the following sets of logical CPUs:
+// The static numa policy maintains the following sets of logical CPUs:
 //
 // - SHARED: Burstable, BestEffort, and non-integral Guaranteed containers
 //   run here. Initially this contains all CPU IDs on the system. As
@@ -74,20 +74,20 @@ var _ Policy = &telcoPolicy{}
 // applications running within exclusively-allocated containers must tolerate
 // potentially sharing their allocated CPUs for up to the CPU manager
 // reconcile period.
-type telcoPolicy struct {
+type staticNumaPolicy struct {
 	// cpu socket topology
 	topology *topology.CPUTopology
 	// set of CPUs that is not available for exclusive assignment
 	reserved cpuset.CPUSet
 }
 
-// Ensure telcoPolicy implements Policy interface
-var _ Policy = &telcoPolicy{}
+// Ensure staticNumaPolicy implements Policy interface
+var _ Policy = &staticNumaPolicy{}
 
-// NewTelcoPolicy returns a CPU manager policy that does not change CPU
+// NewStaticNumaPolicy returns a CPU manager policy that does not change CPU
 // assignments for exclusively pinned guaranteed containers after the main
 // container process starts.
-func NewTelcoPolicy(topology *topology.CPUTopology, numReservedCPUs int) Policy {
+func NewStaticNumaPolicy(topology *topology.CPUTopology, numReservedCPUs int) Policy {
 	allCPUs := topology.CPUDetails.CPUs()
 
 	// takeByTopology allocates CPUs associated with low-numbered cores from
@@ -104,24 +104,24 @@ func NewTelcoPolicy(topology *topology.CPUTopology, numReservedCPUs int) Policy 
 
 	glog.Infof("[cpumanager] reserved %d CPUs (\"%s\") not available for exclusive assignment", reserved.Size(), reserved)
 
-	return &telcoPolicy{
+	return &staticNumaPolicy{
 		topology: topology,
 		reserved: reserved,
 	}
 }
 
-func (p *telcoPolicy) Name() string {
-	return string(PolicyTelco)
+func (p *staticNumaPolicy) Name() string {
+	return string(PolicyStaticNuma)
 }
 
-func (p *telcoPolicy) Start(s state.State) {
+func (p *staticNumaPolicy) Start(s state.State) {
 	if err := p.validateState(s); err != nil {
-		glog.Errorf("[cpumanager] telco policy invalid state: %s\n", err.Error())
+		glog.Errorf("[cpumanager] static numa policy invalid state: %s\n", err.Error())
 		panic("[cpumanager] - please drain node and remove policy state file")
 	}
 }
 
-func (p *telcoPolicy) validateState(s state.State) error {
+func (p *staticNumaPolicy) validateState(s state.State) error {
 	tmpAssignments := s.GetCPUAssignments()
 	tmpDefaultCPUset := s.GetDefaultCPUSet()
 
@@ -157,7 +157,7 @@ func (p *telcoPolicy) validateState(s state.State) error {
 }
 
 // assignableCPUs returns the set of unassigned CPUs minus the reserved set.
-func (p *telcoPolicy) assignableCPUs(s state.State) cpuset.CPUSet {
+func (p *staticNumaPolicy) assignableCPUs(s state.State) cpuset.CPUSet {
 	return s.GetDefaultCPUSet().Difference(p.reserved)
 }
 
@@ -189,20 +189,20 @@ func findTelcoCPUPref(pod *v1.Pod) int {
 	  glog.Errorf("[cpumanager] unable to convert %s annotation to a socket id (value: %s, error: %v). Use static algorythm.", PreferredNUMANodeId, idNuma, err)
       return -1
    }
-   
-   // return Numa id to use for CPU socket  
+
+   // return Numa id to use for CPU socket
    return i
 }
 
 
-func (p *telcoPolicy) AddContainer(s state.State, pod *v1.Pod, container *v1.Container, containerID string) error {
-	glog.Infof("[cpumanager] telco policy: AddContainer (pod: %s, container: %s, container id: %s)", pod.Name, container.Name, containerID)
+func (p *staticNumaPolicy) AddContainer(s state.State, pod *v1.Pod, container *v1.Container, containerID string) error {
+	glog.Infof("[cpumanager] static numa policy: AddContainer (pod: %s, container: %s, container id: %s)", pod.Name, container.Name, containerID)
 	if numCPUs := guaranteedTelcoCPUs(pod, container); numCPUs != 0 {
 		// container belongs in an exclusively allocated pool
-		
+
 		// find preferential cpu in pod annotations, if exist
 		cpuPref := findTelcoCPUPref( pod )
-		
+
 		cpuset, err := p.allocateCPUs(s, numCPUs, cpuPref)
 		if err != nil {
 			glog.Errorf("[cpumanager] unable to allocate %d CPUs (container id: %s, error: %v)", numCPUs, containerID, err)
@@ -214,8 +214,8 @@ func (p *telcoPolicy) AddContainer(s state.State, pod *v1.Pod, container *v1.Con
 	return nil
 }
 
-func (p *telcoPolicy) RemoveContainer(s state.State, containerID string) error {
-	glog.Infof("[cpumanager] telco policy: RemoveContainer (container id: %s)", containerID)
+func (p *staticNumaPolicy) RemoveContainer(s state.State, containerID string) error {
+	glog.Infof("[cpumanager] static numa policy: RemoveContainer (container id: %s)", containerID)
 	if toRelease, ok := s.GetCPUSet(containerID); ok {
 		s.Delete(containerID)
 		// Mutate the shared pool, adding released cpus.
@@ -224,9 +224,9 @@ func (p *telcoPolicy) RemoveContainer(s state.State, containerID string) error {
 	return nil
 }
 
-func (p *telcoPolicy) allocateCPUs(s state.State, numCPUs int, cpuPref int) (cpuset.CPUSet, error) {
+func (p *staticNumaPolicy) allocateCPUs(s state.State, numCPUs int, cpuPref int) (cpuset.CPUSet, error) {
 	glog.Infof("[cpumanager] allocateCpus: (numCPUs: %d, cpuPref: %d)", numCPUs, cpuPref)
-	
+
 	result, err := takeByTopologyTelco(p.topology, p.assignableCPUs(s), numCPUs, cpuPref)
 	if err != nil {
 		return cpuset.NewCPUSet(), err

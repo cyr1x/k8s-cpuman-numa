@@ -26,6 +26,8 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpuset"
 )
 
+// These functions are used by the static numa policy.
+
 // Returns free socket IDs as a slice sorted by:
 // - socket ID in parameter, if he's free.
 // - other socket ID, ascending.

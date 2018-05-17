@@ -4710,8 +4710,10 @@ func validateEndpointPort(port *core.EndpointPort, requireName bool, fldPath *fi
 	} else if len(port.Name) != 0 {
 		allErrs = append(allErrs, ValidateDNS1123Label(port.Name, fldPath.Child("name"))...)
 	}
-	for _, msg := range validation.IsValidPortNum(int(port.Port)) {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("port"), port.Port, msg))
+	if int(port.Port) != 0 {
+		for _, msg := range validation.IsValidPortNum(int(port.Port)) {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("port"), port.Port, msg))
+		}
 	}
 	if len(port.Protocol) == 0 {
 		allErrs = append(allErrs, field.Required(fldPath.Child("protocol"), ""))

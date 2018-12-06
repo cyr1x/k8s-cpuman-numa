@@ -26,12 +26,12 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpuset"
 )
 
-// These functions are used by the static numa policy.
+// These functions are used by the static-numa policy.
 
 // Returns free socket IDs as a slice sorted by:
 // - socket ID in parameter, if he's free.
 // - other socket ID, ascending.
-func (a *cpuAccumulator) freeSocketsTelco( socketIdPref int ) []int {
+func (a *cpuAccumulator) freeSocketsNuma( socketIdPref int ) []int {
 
 	sockets := a.details.Sockets().Filter(a.isSocketFree).ToSlice()
 
@@ -61,52 +61,53 @@ func (a *cpuAccumulator) freeSocketsTelco( socketIdPref int ) []int {
 // - number of CPUs available on the same core
 // - socket ID.
 // - core ID.
-// socketIdPref must be >= 0
-func (a *cpuAccumulator) freeCPUsTelco( socketIdPref int ) []int {
+func (a *cpuAccumulator) freeCPUsNuma( socketIdPref int ) []int {
+	if socketIdPref < 0 {
+		return a.freeCPUs()
+	}
+
 	result := []int{}
 
-	if socketIdPref >= 0 {
-		//get only cores in the prefered socket
-		cores := a.details.CoresInSocket(socketIdPref).ToSlice()
+	//get only cores in the prefered socket
+	cores := a.details.CoresInSocket(socketIdPref).ToSlice()
 
-		//keep the same sort algorithm as static policy, but only with the cores of the prefered socket
-		sort.Slice(
-			cores,
-			func(i, j int) bool {
-				iCore := cores[i]
-				jCore := cores[j]
+	//keep the same sort algorithm as static policy, but only with the cores of the prefered socket
+	sort.Slice(
+		cores,
+		func(i, j int) bool {
+			iCore := cores[i]
+			jCore := cores[j]
 
-				iCPUs := a.topo.CPUDetails.CPUsInCore(iCore).ToSlice()
-				jCPUs := a.topo.CPUDetails.CPUsInCore(jCore).ToSlice()
+			iCPUs := a.topo.CPUDetails.CPUsInCore(iCore).ToSlice()
+			jCPUs := a.topo.CPUDetails.CPUsInCore(jCore).ToSlice()
 
-				iSocket := a.topo.CPUDetails[iCPUs[0]].SocketID
-				jSocket := a.topo.CPUDetails[jCPUs[0]].SocketID
+			iSocket := a.topo.CPUDetails[iCPUs[0]].SocketID
+			jSocket := a.topo.CPUDetails[jCPUs[0]].SocketID
 
-				// Compute the number of CPUs in the result reside on the same socket
-				// as each core.
-				iSocketColoScore := a.topo.CPUDetails.CPUsInSocket(iSocket).Intersection(a.result).Size()
-				jSocketColoScore := a.topo.CPUDetails.CPUsInSocket(jSocket).Intersection(a.result).Size()
+			// Compute the number of CPUs in the result reside on the same socket
+			// as each core.
+			iSocketColoScore := a.topo.CPUDetails.CPUsInSocket(iSocket).Intersection(a.result).Size()
+			jSocketColoScore := a.topo.CPUDetails.CPUsInSocket(jSocket).Intersection(a.result).Size()
 
-				// Compute the number of available CPUs available on the same socket
-				// as each core.
-				iSocketFreeScore := a.details.CPUsInSocket(iSocket).Size()
-				jSocketFreeScore := a.details.CPUsInSocket(jSocket).Size()
+			// Compute the number of available CPUs available on the same socket
+			// as each core.
+			iSocketFreeScore := a.details.CPUsInSocket(iSocket).Size()
+			jSocketFreeScore := a.details.CPUsInSocket(jSocket).Size()
 
-				// Compute the number of available CPUs on each core.
-				iCoreFreeScore := a.details.CPUsInCore(iCore).Size()
-				jCoreFreeScore := a.details.CPUsInCore(jCore).Size()
+			// Compute the number of available CPUs on each core.
+			iCoreFreeScore := a.details.CPUsInCore(iCore).Size()
+			jCoreFreeScore := a.details.CPUsInCore(jCore).Size()
 
-				return iSocketColoScore > jSocketColoScore ||
-					iSocketFreeScore < jSocketFreeScore ||
-					iCoreFreeScore < jCoreFreeScore ||
-					iSocket < jSocket ||
-					iCore < jCore
-			})
+			return iSocketColoScore > jSocketColoScore ||
+				iSocketFreeScore < jSocketFreeScore ||
+				iCoreFreeScore < jCoreFreeScore ||
+				iSocket < jSocket ||
+				iCore < jCore
+		})
 
-		// For each core, append sorted CPU IDs to result.
-		for _, core := range cores {
-			result = append(result, a.details.CPUsInCore(core).ToSlice()...)
-		}
+	// For each core, append sorted CPU IDs to result.
+	for _, core := range cores {
+		result = append(result, a.details.CPUsInCore(core).ToSlice()...)
 	}
 	return result
 }
@@ -117,7 +118,7 @@ func (a *cpuAccumulator) freeCPUsTelco( socketIdPref int ) []int {
 //
 // cpuPref: socket ID for the preferred cpu (-1 if there is no preference)
 //
-func takeByTopologyTelco(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet, numCPUs int, socketIdPref int) (cpuset.CPUSet, error) {
+func takeByTopologyNuma(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet, numCPUs int, socketIdPref int) (cpuset.CPUSet, error) {
 	acc := newCPUAccumulator(topo, availableCPUs, numCPUs)
 	if acc.isSatisfied() {
 		return acc.result, nil
@@ -130,14 +131,14 @@ func takeByTopologyTelco(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet
 
 	// 1. Acquire whole sockets, if available and the container requires at
 	//    least a socket's-worth of CPUs.
-	for _, s := range acc.freeSocketsTelco( socketIdPref ) {
+	for _, s := range acc.freeSocketsNuma( socketIdPref ) {
 		if acc.needs(acc.topo.CPUsPerSocket()) {
-			//glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming socket [%d]", s)
+			//glog.V(4).Infof("[cpumanager] takeByTopologyNuma: claiming socket [%d]", s)
 			var msgpref = "non prefered"
 			if s == socketIdPref {
 				msgpref = "prefered"
 			}
-			glog.Infof("[cpumanager] takeByTopologyTelco: claiming %s socket [%d]", msgpref, s)
+			glog.Infof("[cpumanager] takeByTopologyNuma: claiming %s socket [%d]", msgpref, s)
 			acc.take(acc.details.CPUsInSocket(s))
 			if acc.isSatisfied() {
 				return acc.result, nil
@@ -147,17 +148,13 @@ func takeByTopologyTelco(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet
 
 	// 2. Acquire whole cores on preferential socket
 	if socketIdPref >= 0 {
-
-		//TODO: remove this debug messages
-		glog.Infof("[cpumanager] takeByTopologyTelco: [%d] free cores on socket [%d]", acc.details.CoresInSocket(socketIdPref).Filter(acc.isCoreFree).Size(), socketIdPref)
-		glog.Infof("[cpumanager] takeByTopologyTelco - Debug: cores in socket [%d] = %+v", socketIdPref, acc.details.CoresInSocket(socketIdPref) );
-		glog.Infof("[cpumanager] takeByTopologyTelco - Debug: free cores in socket [%d] = %+v", socketIdPref, acc.details.CoresInSocket(socketIdPref).Filter(acc.isCoreFree) );
+		//glog.Infof("[cpumanager] takeByTopologyNuma - Debug: cores in socket [%d] = %+v", socketIdPref, acc.details.CoresInSocket(socketIdPref) );
+		//glog.Infof("[cpumanager] takeByTopologyNuma - Debug: free cores in socket [%d] = %+v", socketIdPref, acc.details.CoresInSocket(socketIdPref).Filter(acc.isCoreFree) );
 
 		//Range free cores on this socket
 		for _, c := range acc.details.CoresInSocket(socketIdPref).Filter(acc.isCoreFree).ToSlice() {
 			if acc.needs(acc.topo.CPUsPerCore()) {
-				//glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming core [%d] on socket [%d]", c, socketIdPref)
-				glog.Infof("[cpumanager] takeByTopologyTelco: claiming core [%d] on prefered socket [%d]", c, socketIdPref)
+				glog.V(4).Infof("[cpumanager] takeByTopologyNuma: claiming core [%d] on prefered socket [%d]", c, socketIdPref)
 				acc.take(acc.details.CPUsInCore(c))
 				if acc.isSatisfied() {
 					return acc.result, nil
@@ -170,8 +167,7 @@ func takeByTopologyTelco(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet
 	//    if available and the container requires at least a core's-worth of CPUs.
 	for _, c := range acc.freeCores() {
 		if acc.needs(acc.topo.CPUsPerCore()) {
-			//glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming core [%d]", c)
-			glog.Infof("[cpumanager] takeByTopologyTelco: claiming core [%d] on non prefered socket", c)
+			glog.V(4).Infof("[cpumanager] takeByTopologyNuma: claiming core [%d] on non prefered socket", c)
 			acc.take(acc.details.CPUsInCore(c))
 			if acc.isSatisfied() {
 				return acc.result, nil
@@ -183,10 +179,9 @@ func takeByTopologyTelco(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet
 	//    on the same sockets as the whole cores we have already taken in this
 	//    allocation. Priority to the prefered socket
 	//Range free cpu (process unit) on this socket
-	for _, c := range acc.freeCPUsTelco(socketIdPref) {
+	for _, c := range acc.freeCPUsNuma(socketIdPref) {
 		if acc.needs(1) {
-			//glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming CPU [%d] on socket [%d]", c, socketIdPref)
-			glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming CPU [%d] on prefered socket [%d]", c, socketIdPref)
+			glog.V(4).Infof("[cpumanager] takeByTopologyNuma: claiming CPU (thread) [%d] on prefered socket [%d]", c, socketIdPref)
 			acc.take(cpuset.NewCPUSet(c))
 		}
 		if acc.isSatisfied() {
@@ -199,8 +194,7 @@ func takeByTopologyTelco(topo *topology.CPUTopology, availableCPUs cpuset.CPUSet
 	//    allocation.
 	for _, c := range acc.freeCPUs() {
 		if acc.needs(1) {
-			//glog.V(4).Infof("[cpumanager] takeByTopologyTelco: claiming CPU [%d]", c)
-			glog.Infof("[cpumanager] takeByTopologyTelco: claiming CPU [%d] on non prefered socket", c)
+			glog.V(4).Infof("[cpumanager] takeByTopologyNuma: claiming CPU (thread) [%d] on non prefered socket", c)
 			acc.take(cpuset.NewCPUSet(c))
 		}
 		if acc.isSatisfied() {

@@ -139,18 +139,16 @@ func NewManager(cpuPolicyName string, reconcilePeriod time.Duration, machineInfo
 		glog.Infof("[cpumanager] detected CPU topology: %v", topo)
 		reservedCPUs, ok := nodeAllocatableReservation[v1.ResourceCPU]
 		if !ok {
-			// The statuc numa policy cannot initialize without this information. Panic!
-			panic("[cpumanager] unable to determine reserved CPU resources for static numa policy")
+			// The static numa policy cannot initialize without this information. Panic!
+			return nil, fmt.Errorf("[cpumanager] unable to determine reserved CPU resources for static-numa policy")
 		}
 		if reservedCPUs.IsZero() {
-			// Panic!
-			//
 			// The static numa policy requires this to be nonzero. Zero CPU reservation
 			// would allow the shared pool to be completely exhausted. At that point
 			// either we would violate our guarantee of exclusivity or need to evict
 			// any pod that has at least one container that requires zero CPUs.
 			// See the comments in policy_numa.go for more details.
-			panic("[cpumanager] the static numa policy requires systemreserved.cpu + kubereserved.cpu to be greater than zero")
+			return nil, fmt.Errorf("[cpumanager] the static-numa policy requires systemreserved.cpu + kubereserved.cpu to be greater than zero")
 		}
 
 		// Take the ceiling of the reservation, since fractional CPUs cannot be

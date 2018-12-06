@@ -82,3 +82,118 @@ That said, if you have questions, reach out to us
 [troubleshooting guide]: https://kubernetes.io/docs/tasks/debug-application-cluster/troubleshooting/
 
 [![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/README.md?pixel)]()
+
+----
+
+## New "static-numa" policy for the CPU Manager
+
+A new "static-numa" policy is available to prioritize a NUMA node for CPU pinning.
+
+### Files modified and added
+
+Modified files:
+ * README.md   (this file)
+ * pkg/kubelet/cm/cpumanager/cpu_manager.go
+ * pkg/kubelet/cm/cpumanager/cpu_manager_test.go
+
+New files:
+ * pkg/kubelet/cm/cpumanager/numa_assignment.go
+ * pkg/kubelet/cm/cpumanager/numa_assignment_test.go
+ * pkg/kubelet/cm/cpumanager/policy_numa.go
+ * pkg/kubelet/cm/cpumanager/policy_numa_test.go
+
+
+### Get the sources
+
+Sources (complete Kubernetes and modifications) are a available in the Orange Forge repository:
+ * URL: https://gitlab.forge.orange-labs.fr/telco-k8s
+ * project: k8s-cpuman
+ * Tags for the numa cpu pinning:
+    * v1.9.3-6_numa
+    * v1.9.5-6_numa
+    * v1.12.3-6_numa
+ * Branches for the numa cpu pinning:
+    * telco_policy   (for 1.9.x)
+    * telco_policy_1.12   (for 1.12.3)
+
+TODO: confirm repository URL  
+```sh
+$ git clone https://gitlab.forge.orange-labs.fr/telco-k8s/k8s-cpuman/
+$ cd kubernetes
+$ git checkout tags/v1.12.3-6_numa
+```
+
+
+### Execute unit tests
+
+Go to your kubernetes directory and use this command to execute all the test files in the specified directory (here only the cpu manager unit tests):
+```
+$ make check WHAT=./pkg/kubelet/cm/cpumanager GOFLAGS=-v
+```
+
+
+### Compile and build Kubernetes (and the new kubelet service)
+
+Tested on a VirtualBox VM with Ubuntu 16.04 and 18.04 (64 bits).
+
+To build kubernetes binary with the same characteristics as your building environment, go to your kubernetes directory and use this command :
+
+```sh
+$ make quick-release
+```
+Archives and binaries are stored in the _output directory, for me in ~/kubernetes/_output. And binaries are in ~/kubernetes/_output/dockerized/bin/linux/amd64
+
+
+If you need to build binaries for more OS and processors, use this command:
+```sh
+$ make release
+```
+It's a very long process. You need more than 12 Gb of RAM for parallel compilation (faster).
+
+Binaries are in _output directory.
+
+
+### Deploy new kubelet service on an existing cluster
+
+#### Manual procedure
+
+On each node (minion):
+ 1. Backup kubelet binary /usr/local/bin/kubelet
+ 2. Backup kubelet config file /etc/kubernetes/kubelet.env
+ 3. Exclude the node from the cluster: from client side with kubectl, use:
+``` sh
+$ kubectl drain node_name --ignore-daemonsets      (other option: --delete-local-data)
+```
+ 4. Stop kubelet service:
+``` sh
+$ sudo systemctl stop kubelet
+```
+ 5. Replace /usr/local/bin/kubelet  file with the numa version
+ 6. In /etc/kubernetes/kubelet.env  change --cpu-manager-policy parameter to "static-numa" , or add this line in the KUBELET_ARGS parameters:
+```
+--cpu-manager-policy=static-numa \
+```
+ 7. Start kubelet service:
+``` sh
+$ sudo systemctl start kubelet
+```
+ 8. Reactivate the node in the cluster and check node status: from client side with kubectl, use:
+``` sh
+$ kubectl uncordon node_name
+$ kubectl get nodes
+```
+The node version must be "v1.12.3-6_numa" and his status "Ready".
+
+#### Ansible procedure
+
+A "kubeletdeploy" tool is available in the Orange Forge git:
+ * Project: **k8s-kubespray**
+ * Directory: **tools/kubeletdeploy**
+ * URL: https://gitlab.forge.orange-labs.fr/telco-k8s/k8s-kubespray/tree/master/tools/kubeletdeploy
+
+A README is available.
+
+This tool use Ansible to deploy the kubelet binary and config files to one or more nodes (without draining the nodes).
+**Warning**: the kubelet config file is defined in a jinja template **./templates/kubelet.env.node.j2**
+
+Actually this template is a "standard" template for K8s kubelet v1.9.5. You need to change this template for your need and version used on your cluster.

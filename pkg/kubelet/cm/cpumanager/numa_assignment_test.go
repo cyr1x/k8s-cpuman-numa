@@ -25,7 +25,7 @@ import (
 )
 
 
-func TestCPUAccumulatorFreeSocketsTelco(t *testing.T) {
+func TestCPUAccumulatorFreeSocketsNuma(t *testing.T) {
 	testCases := []struct {
 		description   string
 		topo          *topology.CPUTopology
@@ -128,7 +128,7 @@ func TestCPUAccumulatorFreeSocketsTelco(t *testing.T) {
 
 	for _, tc := range testCases {
 		acc := newCPUAccumulator(tc.topo, tc.availableCPUs, 0)
-		result := acc.freeSocketsTelco(tc.socketIdPref)
+		result := acc.freeSocketsNuma(tc.socketIdPref)
 		if !reflect.DeepEqual(result, tc.expect) {
 			t.Errorf("[%s] expected %v to equal %v", tc.description, result, tc.expect)
 		}
@@ -137,7 +137,7 @@ func TestCPUAccumulatorFreeSocketsTelco(t *testing.T) {
 
 
 
-func TestCPUAccumulatorFreeCPUsTelco(t *testing.T) {
+func TestCPUAccumulatorFreeCPUsNuma(t *testing.T) {
 	testCases := []struct {
 		description   string
 		topo          *topology.CPUTopology
@@ -199,62 +199,62 @@ func TestCPUAccumulatorFreeCPUsTelco(t *testing.T) {
 			topoDualSocketHT,
 			cpuset.NewCPUSet(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
 			0,
-			[]int{0, 6, 2, 8, 4, 10, 1, 7, 3, 9, 5, 11},
+			[]int{0, 6, 2, 8, 4, 10},
 		},
 		{
-			"dual socket HT, 11 cpus free, no pref socket 0",
+			"dual socket HT, 11 cpus free, pref socket 0",
 			topoDualSocketHT,
 			cpuset.NewCPUSet(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
 			0,
-			[]int{6, 2, 8, 4, 10, 1, 7, 3, 9, 5, 11},
+			[]int{6, 2, 8, 4, 10},
 		},
 		{
 			"dual socket HT, 10 cpus free, pref socket 0",
 			topoDualSocketHT,
 			cpuset.NewCPUSet(1, 2, 3, 4, 5, 7, 8, 9, 10, 11),
 			0,
-			[]int{2, 8, 4, 10, 1, 7, 3, 9, 5, 11},
+			[]int{2, 8, 4, 10},
 		},
 		{
 			"dual socket HT, 12 cpus free, pref socket 1",
 			topoDualSocketHT,
 			cpuset.NewCPUSet(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
 			1,
-			[]int{1, 7, 3, 9, 5, 11, 0, 6, 2, 8, 4, 10},
+			[]int{1, 7, 3, 9, 5, 11},
 		},
 		{
-			"dual socket HT, 11 cpus free, no pref socket 1",
+			"dual socket HT, 11 cpus free, pref socket 1",
 			topoDualSocketHT,
 			cpuset.NewCPUSet(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
 			1,
-			[]int{1, 7, 3, 9, 5, 11, 6, 2, 8, 4, 10},
+			[]int{1, 7, 3, 9, 5, 11},
 		},
 		{
 			"dual socket HT, 10 cpus free, pref socket 1",
 			topoDualSocketHT,
 			cpuset.NewCPUSet(1, 2, 3, 4, 5, 7, 8, 9, 10, 11),
 			1,
-			[]int{1, 7, 3, 9, 5, 11, 2, 8, 4, 10},
+			[]int{1, 7, 3, 9, 5, 11},
 		},
 		{
 			"dual socket HT, 10 cpus free, pref socket 1",
 			topoDualSocketHT,
 			cpuset.NewCPUSet(0, 2, 3, 4, 5, 6, 8, 9, 10, 11),
 			1,
-			[]int{3, 9, 5, 11, 0, 6, 2, 8, 4, 10},
+			[]int{3, 9, 5, 11},
 		},
 	}
 
 	for _, tc := range testCases {
 		acc := newCPUAccumulator(tc.topo, tc.availableCPUs, 0)
-		result := acc.freeCPUsTelco(tc.socketIdPref)
+		result := acc.freeCPUsNuma(tc.socketIdPref)
 		if !reflect.DeepEqual(result, tc.expect) {
 			t.Errorf("[%s] expected %v to equal %v", tc.description, result, tc.expect)
 		}
 	}
 }
 
-func TestTakeByTopologyTelco(t *testing.T) {
+func TestTakeByTopologyNuma(t *testing.T) {
 	testCases := []struct {
 		description   string
 		topo          *topology.CPUTopology
@@ -264,7 +264,7 @@ func TestTakeByTopologyTelco(t *testing.T) {
 		expErr        string
 		expResult     cpuset.CPUSet
 	}{
-		{
+ 		{
 			"take more cpus than are available from single socket with HT",
 			topoSingleSocketHT,
 			cpuset.NewCPUSet(0, 2, 4, 6),
@@ -386,7 +386,7 @@ func TestTakeByTopologyTelco(t *testing.T) {
 			topoDualSocketHT,
 			cpuset.NewCPUSet(1, 2, 3, 4, 5, 7, 8, 9, 10, 11),
 			1,
-			0,
+			1,
 			"",
 			cpuset.NewCPUSet(1),
 		},
@@ -433,14 +433,14 @@ func TestTakeByTopologyTelco(t *testing.T) {
 			3,
 			0,
 			"",
-			cpuset.NewCPUSet(2, 8, 4),    
+			cpuset.NewCPUSet(2, 8, 6),    
 		},
 		{
 			"take 3 cpus from dual socket with HT - priority to Socket 1",
 			topoDualSocketHT,
 			cpuset.NewCPUSet(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
 			3,
-			0,
+			1,
 			"",
 			cpuset.NewCPUSet(1, 7, 3),    
 		},
@@ -448,7 +448,7 @@ func TestTakeByTopologyTelco(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		result, err := takeByTopologyTelco(tc.topo, tc.availableCPUs, tc.numCPUs, tc.socketIdPref)
+		result, err := takeByTopologyNuma(tc.topo, tc.availableCPUs, tc.numCPUs, tc.socketIdPref)
 		if tc.expErr != "" && err.Error() != tc.expErr {
 			t.Errorf("expected error to be [%v] but it was [%v] in test \"%s\"", tc.expErr, err, tc.description)
 		}

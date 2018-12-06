@@ -34,8 +34,6 @@ const PolicyStaticNuma policyName = "static-numa"
 // Label for the prefered CPU
 const PreferredNUMANodeId = "PreferredNUMANodeId"
 
-var _ Policy = &staticNumaPolicy{}
-
 // staticNumaPolicy is a CPU manager policy that does not change CPU
 // assignments for exclusively pinned guaranteed containers after the main
 // container process starts.
@@ -67,8 +65,8 @@ var _ Policy = &staticNumaPolicy{}
 // - EXCLUSIVE ALLOCATIONS: CPU sets assigned exclusively to one container.
 //   These are stored as explicit assignments in the state.
 //
-// When an exclusive allocation is made, the telco policy also updates the
-// default cpuset in the state abstraction. The CPU manager's periodic
+// When an exclusive allocation is made, the static-numa policy also updates
+// the default cpuset in the state abstraction. The CPU manager's periodic
 // reconcile loop takes care of rewriting the cpuset in cgroupfs for any
 // containers that may be running in the shared pool. For this reason,
 // applications running within exclusively-allocated containers must tolerate
@@ -96,7 +94,7 @@ func NewStaticNumaPolicy(topology *topology.CPUTopology, numReservedCPUs int) Po
 	// For example: Given a system with 8 CPUs available and HT enabled,
 	// if numReservedCPUs=2, then reserved={0,4}
 	// Last parameter -1: no preferential CPU socket.
-	reserved, _ := takeByTopologyTelco(topology, allCPUs, numReservedCPUs, -1)
+	reserved, _ := takeByTopologyNuma(topology, allCPUs, numReservedCPUs, -1)
 
 	if reserved.Size() != numReservedCPUs {
 		panic(fmt.Sprintf("[cpumanager] unable to reserve the required amount of CPUs (size of %s did not equal %d)", reserved, numReservedCPUs))
@@ -116,7 +114,7 @@ func (p *staticNumaPolicy) Name() string {
 
 func (p *staticNumaPolicy) Start(s state.State) {
 	if err := p.validateState(s); err != nil {
-		glog.Errorf("[cpumanager] static numa policy invalid state: %s\n", err.Error())
+		glog.Errorf("[cpumanager] static-numa policy invalid state: %s\n", err.Error())
 		panic("[cpumanager] - please drain node and remove policy state file")
 	}
 }
@@ -137,7 +135,7 @@ func (p *staticNumaPolicy) validateState(s state.State) error {
 	}
 
 	// State has already been initialized from file (is not empty)
-	// 1 Check if the reserved cpuset is not part of default cpuset because:
+	// 1. Check if the reserved cpuset is not part of default cpuset because:
 	// - kube/system reserved have changed (increased) - may lead to some containers not being able to start
 	// - user tampered with file
 	if !p.reserved.Intersection(tmpDefaultCPUset).Equals(p.reserved) {
@@ -145,7 +143,7 @@ func (p *staticNumaPolicy) validateState(s state.State) error {
 			p.reserved.String(), tmpDefaultCPUset.String())
 	}
 
-	// 2. Check if state for telco policy is consistent
+	// 2. Check if state for static-numa policy is consistent
 	for cID, cset := range tmpAssignments {
 		// None of the cpu in DEFAULT cset should be in s.assignments
 		if !tmpDefaultCPUset.Intersection(cset).IsEmpty() {
@@ -153,6 +151,23 @@ func (p *staticNumaPolicy) validateState(s state.State) error {
 				cID, cset.String(), tmpDefaultCPUset.String())
 		}
 	}
+
+	// 3. It's possible that the set of available CPUs has changed since
+	// the state was written. This can be due to for example
+	// offlining a CPU when kubelet is not running. If this happens,
+	// CPU manager will run into trouble when later it tries to
+	// assign non-existent CPUs to containers. Validate that the
+	// topology that was received during CPU manager startup matches with
+	// the set of CPUs stored in the state.
+	totalKnownCPUs := tmpDefaultCPUset.Clone()
+	for _, cset := range tmpAssignments {
+		totalKnownCPUs = totalKnownCPUs.Union(cset)
+	}
+	if !totalKnownCPUs.Equals(p.topology.CPUDetails.CPUs()) {
+		return fmt.Errorf("current set of available CPUs \"%s\" doesn't match with CPUs in state \"%s\"",
+			p.topology.CPUDetails.CPUs().String(), totalKnownCPUs.String())
+	}
+
 	return nil
 }
 
@@ -163,11 +178,7 @@ func (p *staticNumaPolicy) assignableCPUs(s state.State) cpuset.CPUSet {
 
 
 // Find the socket ID of the prefered CPU in pod annotations, otherwise return -1
-func findTelcoCPUPref(pod *v1.Pod) int {
-
-//   //Try to find pod label with the socket ID of the prefered CPU
-//   podLabel := pod.GetLabels()
-//   idSocket, prs := podLabel[ LabelPreferedCPU ]
+func findNumaCPUPref(pod *v1.Pod) int {
 
    //Try to find pod annotation with the socket ID of the prefered NUMA node
    podAnnot := pod.GetAnnotations()
@@ -196,12 +207,17 @@ func findTelcoCPUPref(pod *v1.Pod) int {
 
 
 func (p *staticNumaPolicy) AddContainer(s state.State, pod *v1.Pod, container *v1.Container, containerID string) error {
-	glog.Infof("[cpumanager] static numa policy: AddContainer (pod: %s, container: %s, container id: %s)", pod.Name, container.Name, containerID)
-	if numCPUs := guaranteedTelcoCPUs(pod, container); numCPUs != 0 {
+	if numCPUs := guaranteedNumaCPUs(pod, container); numCPUs != 0 {
+		glog.Infof("[cpumanager] static-numa policy: AddContainer (pod: %s, container: %s, container id: %s)", pod.Name, container.Name, containerID)
 		// container belongs in an exclusively allocated pool
 
+		if _, ok := s.GetCPUSet(containerID); ok {
+			glog.Infof("[cpumanager] static-numa policy: container already present in state, skipping (container: %s, container id: %s)", container.Name, containerID)
+			return nil
+		}
+
 		// find preferential cpu in pod annotations, if exist
-		cpuPref := findTelcoCPUPref( pod )
+		cpuPref := findNumaCPUPref( pod )
 
 		cpuset, err := p.allocateCPUs(s, numCPUs, cpuPref)
 		if err != nil {
@@ -215,7 +231,7 @@ func (p *staticNumaPolicy) AddContainer(s state.State, pod *v1.Pod, container *v
 }
 
 func (p *staticNumaPolicy) RemoveContainer(s state.State, containerID string) error {
-	glog.Infof("[cpumanager] static numa policy: RemoveContainer (container id: %s)", containerID)
+	glog.Infof("[cpumanager] static-numa policy: RemoveContainer (container id: %s)", containerID)
 	if toRelease, ok := s.GetCPUSet(containerID); ok {
 		s.Delete(containerID)
 		// Mutate the shared pool, adding released cpus.
@@ -227,7 +243,7 @@ func (p *staticNumaPolicy) RemoveContainer(s state.State, containerID string) er
 func (p *staticNumaPolicy) allocateCPUs(s state.State, numCPUs int, cpuPref int) (cpuset.CPUSet, error) {
 	glog.Infof("[cpumanager] allocateCpus: (numCPUs: %d, cpuPref: %d)", numCPUs, cpuPref)
 
-	result, err := takeByTopologyTelco(p.topology, p.assignableCPUs(s), numCPUs, cpuPref)
+	result, err := takeByTopologyNuma(p.topology, p.assignableCPUs(s), numCPUs, cpuPref)
 	if err != nil {
 		return cpuset.NewCPUSet(), err
 	}
@@ -238,7 +254,7 @@ func (p *staticNumaPolicy) allocateCPUs(s state.State, numCPUs int, cpuPref int)
 	return result, nil
 }
 
-func guaranteedTelcoCPUs(pod *v1.Pod, container *v1.Container) int {
+func guaranteedNumaCPUs(pod *v1.Pod, container *v1.Container) int {
 	if v1qos.GetPodQOS(pod) != v1.PodQOSGuaranteed {
 		return 0
 	}

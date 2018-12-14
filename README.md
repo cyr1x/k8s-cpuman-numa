@@ -197,3 +197,29 @@ This tool use Ansible to deploy the kubelet binary and config files to one or mo
 **Warning**: the kubelet config file is defined in a jinja template **./templates/kubelet.env.node.j2**
 
 Actually this template is a "standard" template for K8s kubelet v1.9.5. You need to change this template for your need and version used on your cluster.
+
+
+
+### How to use static-numa policy in a pod?
+
+You must add an annotation "PreferredNUMANodeId" specifying the CPU index (or NUMA node) on which you want the pod to run. Index starts at 0.
+
+For example:
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: exclusive-2-s1
+  annotations:
+    PreferredNUMANodeId: "1"
+spec:
+  nodeName: node3
+  containers:
+  - image: quay.io/connordoyle/cpuset-visualizer
+    name: exclusive-2-s1
+    resources:
+      limits:
+        cpu: 2
+        memory: "256M"
+```
+This pod try to execute the container on the 2nd CPU (N° 1) on the node3, on 2 reserved "logical CPUs" (ie one physical core with hyper threading)

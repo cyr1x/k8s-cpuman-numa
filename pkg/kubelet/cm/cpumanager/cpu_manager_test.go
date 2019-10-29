@@ -303,31 +303,6 @@ func TestCPUManagerGenerate(t *testing.T) {
 			nodeAllocatableReservation: v1.ResourceList{v1.ResourceCPU: *resource.NewQuantity(0, resource.DecimalSI)},
 			expectedError:              fmt.Errorf("the static policy requires systemreserved.cpu + kubereserved.cpu to be greater than zero"),
 		},
-		{
-			description:                "static-numa policy",
-			cpuPolicyName:              "static-numa",
-			nodeAllocatableReservation: v1.ResourceList{v1.ResourceCPU: *resource.NewQuantity(3, resource.DecimalSI)},
-			expectedPolicy:             "static-numa",
-		},
-		{
-			description:                "static-numa policy - broken topology",
-			cpuPolicyName:              "static-numa",
-			nodeAllocatableReservation: v1.ResourceList{},
-			isTopologyBroken:           true,
-			expectedError:              fmt.Errorf("could not detect number of cpus"),
-		},
-		{
-			description:                "static-numa policy - broken reservation",
-			cpuPolicyName:              "static-numa",
-			nodeAllocatableReservation: v1.ResourceList{},
-			expectedError:              fmt.Errorf("unable to determine reserved CPU resources for static-numa policy"),
-		},
-		{
-			description:                "static-numa policy - no CPU resources",
-			cpuPolicyName:              "static-numa",
-			nodeAllocatableReservation: v1.ResourceList{v1.ResourceCPU: *resource.NewQuantity(0, resource.DecimalSI)},
-			expectedError:              fmt.Errorf("the static-numa policy requires systemreserved.cpu + kubereserved.cpu to be greater than zero"),
-		},
 	}
 
 	mockedMachineInfo := cadvisorapi.MachineInfo{

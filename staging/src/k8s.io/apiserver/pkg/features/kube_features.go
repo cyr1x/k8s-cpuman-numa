@@ -47,13 +47,6 @@ const (
 	ValidateProxyRedirects featuregate.Feature = "ValidateProxyRedirects"
 
 	// owner: @tallclair
-	// alpha: v1.10
-	//
-	// ValidateProxyRedirects controls whether the apiserver should validate that redirects are only
-	// followed to the same host. Only used if StreamingProxyRedirects is enabled.
-	ValidateProxyRedirects utilfeature.Feature = "ValidateProxyRedirects"
-
-	// owner: @tallclair
 	// alpha: v1.7
 	// beta: v1.8
 	// GA: v1.12

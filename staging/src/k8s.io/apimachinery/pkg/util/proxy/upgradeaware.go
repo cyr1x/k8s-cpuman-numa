@@ -338,17 +338,6 @@ func (h *UpgradeAwareHandler) tryUpgrade(w http.ResponseWriter, req *http.Reques
 		}
 	}
 
-	if rawResponseCode != http.StatusSwitchingProtocols {
-		// If the backend did not upgrade the request, finish echoing the response from the backend to the client and return, closing the connection.
-		glog.V(6).Infof("Proxy upgrade error, status code %d", rawResponseCode)
-		_, err := io.Copy(requestHijackedConn, backendConn)
-		if err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
-			glog.Errorf("Error proxying data from backend to client: %v", err)
-		}
-		// Indicate we handled the request
-		return true
-	}
-
 	// Proxy the connection. This is bidirectional, so we need a goroutine
 	// to copy in each direction. Once one side of the connection exits, we
 	// exit the function which performs cleanup and in the process closes

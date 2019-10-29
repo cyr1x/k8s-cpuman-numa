@@ -104,6 +104,9 @@ type ManagerImpl struct {
 
 	// Store of Topology Affinties that the Device Manager can query.
 	topologyAffinityStore topologymanager.Store
+
+	// NUMA Node ID for CPU Pinned
+	numaNodePref int
 }
 
 type endpointInfo struct {

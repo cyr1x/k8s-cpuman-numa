@@ -24,7 +24,6 @@ go_library(
         "doc.go",
         "errors.go",
         "freelist.go",
-        "freelist_hmap.go",
         "node.go",
         "page.go",
         "tx.go",

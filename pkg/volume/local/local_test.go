@@ -21,19 +21,19 @@ package local
 import (
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"testing"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utiltesting "k8s.io/client-go/util/testing"
 	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/kubernetes/pkg/volume"
 	volumetest "k8s.io/kubernetes/pkg/volume/testing"
+	"k8s.io/kubernetes/pkg/volume/util/hostutil"
 )
 
 const (
@@ -41,7 +41,6 @@ const (
 	testMountPath                     = "pods/poduid/volumes/kubernetes.io~local-volume/pvA"
 	testGlobalPath                    = "plugins/kubernetes.io~local-volume/volumeDevices/pvA"
 	testPodPath                       = "pods/poduid/volumeDevices/kubernetes.io~local-volume"
-	testNodeName                      = "fakeNodeName"
 	testBlockFormattingToFSGlobalPath = "plugins/kubernetes.io/local-volume/mounts/pvA"
 )
 
@@ -111,10 +110,10 @@ func getDeviceMountablePluginWithBlockPath(t *testing.T, isBlockDevice bool) (st
 	}
 
 	plugMgr := volume.VolumePluginMgr{}
-	var pathToFSType map[string]mount.FileType
+	var pathToFSType map[string]hostutil.FileType
 	if isBlockDevice {
-		pathToFSType = map[string]mount.FileType{
-			tmpDir: mount.FileTypeBlockDev,
+		pathToFSType = map[string]hostutil.FileType{
+			tmpDir: hostutil.FileTypeBlockDev,
 		}
 	}
 
@@ -131,7 +130,7 @@ func getDeviceMountablePluginWithBlockPath(t *testing.T, isBlockDevice bool) (st
 	return tmpDir, plug
 }
 
-func getTestVolume(readOnly bool, path string, isBlock bool) *volume.Spec {
+func getTestVolume(readOnly bool, path string, isBlock bool, mountOptions []string) *volume.Spec {
 	pv := &v1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: testPVName,
@@ -142,6 +141,7 @@ func getTestVolume(readOnly bool, path string, isBlock bool) *volume.Spec {
 					Path: path,
 				},
 			},
+			MountOptions: mountOptions,
 		},
 	}
 
@@ -156,7 +156,7 @@ func TestCanSupport(t *testing.T) {
 	tmpDir, plug := getPlugin(t)
 	defer os.RemoveAll(tmpDir)
 
-	if !plug.CanSupport(getTestVolume(false, tmpDir, false)) {
+	if !plug.CanSupport(getTestVolume(false, tmpDir, false, nil)) {
 		t.Errorf("Expected true")
 	}
 }
@@ -182,7 +182,7 @@ func TestGetVolumeName(t *testing.T) {
 	tmpDir, plug := getPersistentPlugin(t)
 	defer os.RemoveAll(tmpDir)
 
-	volName, err := plug.GetVolumeName(getTestVolume(false, tmpDir, false))
+	volName, err := plug.GetVolumeName(getTestVolume(false, tmpDir, false, nil))
 	if err != nil {
 		t.Errorf("Failed to get volume name: %v", err)
 	}
@@ -196,12 +196,12 @@ func TestInvalidLocalPath(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	pod := &v1.Pod{ObjectMeta: metav1.ObjectMeta{UID: types.UID("poduid")}}
-	mounter, err := plug.NewMounter(getTestVolume(false, "/no/backsteps/allowed/..", false), pod, volume.VolumeOptions{})
+	mounter, err := plug.NewMounter(getTestVolume(false, "/no/backsteps/allowed/..", false, nil), pod, volume.VolumeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = mounter.SetUp(nil)
+	err = mounter.SetUp(volume.MounterArgs{})
 	expectedMsg := "invalid path: /no/backsteps/allowed/.. must not contain '..'"
 	if err.Error() != expectedMsg {
 		t.Fatalf("expected error `%s` but got `%s`", expectedMsg, err)
@@ -218,7 +218,7 @@ func TestBlockDeviceGlobalPathAndMountDevice(t *testing.T) {
 		t.Errorf("Failed to make a new device mounter: %v", err)
 	}
 
-	pvSpec := getTestVolume(false, tmpBlockDir, false)
+	pvSpec := getTestVolume(false, tmpBlockDir, false, nil)
 
 	expectedGlobalPath := filepath.Join(tmpBlockDir, testBlockFormattingToFSGlobalPath)
 	actualPath, err := dm.GetDeviceMountPath(pvSpec)
@@ -264,7 +264,7 @@ func TestFSGlobalPathAndMountDevice(t *testing.T) {
 		t.Errorf("Failed to make a new device mounter: %v", err)
 	}
 
-	pvSpec := getTestVolume(false, tmpFSDir, false)
+	pvSpec := getTestVolume(false, tmpFSDir, false, nil)
 
 	expectedGlobalPath := tmpFSDir
 	actualPath, err := dm.GetDeviceMountPath(pvSpec)
@@ -294,7 +294,7 @@ func TestMountUnmount(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	pod := &v1.Pod{ObjectMeta: metav1.ObjectMeta{UID: types.UID("poduid")}}
-	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false), pod, volume.VolumeOptions{})
+	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false, nil), pod, volume.VolumeOptions{})
 	if err != nil {
 		t.Errorf("Failed to make a new Mounter: %v", err)
 	}
@@ -302,13 +302,13 @@ func TestMountUnmount(t *testing.T) {
 		t.Fatalf("Got a nil Mounter")
 	}
 
-	volPath := path.Join(tmpDir, testMountPath)
+	volPath := filepath.Join(tmpDir, testMountPath)
 	path := mounter.GetPath()
 	if path != volPath {
 		t.Errorf("Got unexpected path: %s", path)
 	}
 
-	if err := mounter.SetUp(nil); err != nil {
+	if err := mounter.SetUp(volume.MounterArgs{}); err != nil {
 		t.Errorf("Expected success, got: %v", err)
 	}
 
@@ -347,7 +347,7 @@ func TestMapUnmap(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	pod := &v1.Pod{ObjectMeta: metav1.ObjectMeta{UID: types.UID("poduid")}}
-	volSpec := getTestVolume(false, tmpDir, true /*isBlock*/)
+	volSpec := getTestVolume(false, tmpDir, true /*isBlock*/, nil)
 	mapper, err := plug.NewBlockVolumeMapper(volSpec, pod, volume.VolumeOptions{})
 	if err != nil {
 		t.Errorf("Failed to make a new Mounter: %v", err)
@@ -356,7 +356,7 @@ func TestMapUnmap(t *testing.T) {
 		t.Fatalf("Got a nil Mounter")
 	}
 
-	expectedGlobalPath := path.Join(tmpDir, testGlobalPath)
+	expectedGlobalPath := filepath.Join(tmpDir, testGlobalPath)
 	globalPath, err := mapper.GetGlobalMapPath(volSpec)
 	if err != nil {
 		t.Errorf("Failed to get global path: %v", err)
@@ -364,7 +364,7 @@ func TestMapUnmap(t *testing.T) {
 	if globalPath != expectedGlobalPath {
 		t.Errorf("Got unexpected path: %s, expected %s", globalPath, expectedGlobalPath)
 	}
-	expectedPodPath := path.Join(tmpDir, testPodPath)
+	expectedPodPath := filepath.Join(tmpDir, testPodPath)
 	podPath, volName := mapper.GetPodDeviceMapPath()
 	if podPath != expectedPodPath {
 		t.Errorf("Got unexpected pod path: %s, expected %s", podPath, expectedPodPath)
@@ -399,7 +399,7 @@ func TestMapUnmap(t *testing.T) {
 }
 
 func testFSGroupMount(plug volume.VolumePlugin, pod *v1.Pod, tmpDir string, fsGroup int64) error {
-	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false), pod, volume.VolumeOptions{})
+	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false, nil), pod, volume.VolumeOptions{})
 	if err != nil {
 		return err
 	}
@@ -407,13 +407,15 @@ func testFSGroupMount(plug volume.VolumePlugin, pod *v1.Pod, tmpDir string, fsGr
 		return fmt.Errorf("Got a nil Mounter")
 	}
 
-	volPath := path.Join(tmpDir, testMountPath)
+	volPath := filepath.Join(tmpDir, testMountPath)
 	path := mounter.GetPath()
 	if path != volPath {
 		return fmt.Errorf("Got unexpected path: %s", path)
 	}
 
-	if err := mounter.SetUp(&fsGroup); err != nil {
+	var mounterArgs volume.MounterArgs
+	mounterArgs.FsGroup = &fsGroup
+	if err := mounter.SetUp(mounterArgs); err != nil {
 		return err
 	}
 	return nil
@@ -423,7 +425,7 @@ func TestConstructVolumeSpec(t *testing.T) {
 	tmpDir, plug := getPlugin(t)
 	defer os.RemoveAll(tmpDir)
 
-	volPath := path.Join(tmpDir, testMountPath)
+	volPath := filepath.Join(tmpDir, testMountPath)
 	spec, err := plug.ConstructVolumeSpec(testPVName, volPath)
 	if err != nil {
 		t.Errorf("ConstructVolumeSpec() failed: %v", err)
@@ -464,7 +466,7 @@ func TestConstructBlockVolumeSpec(t *testing.T) {
 	tmpDir, plug := getBlockPlugin(t)
 	defer os.RemoveAll(tmpDir)
 
-	podPath := path.Join(tmpDir, testPodPath)
+	podPath := filepath.Join(tmpDir, testPodPath)
 	spec, err := plug.ConstructBlockVolumeSpec(types.UID("poduid"), testPVName, podPath)
 	if err != nil {
 		t.Errorf("ConstructBlockVolumeSpec() failed: %v", err)
@@ -501,13 +503,40 @@ func TestConstructBlockVolumeSpec(t *testing.T) {
 	}
 }
 
+func TestMountOptions(t *testing.T) {
+	tmpDir, plug := getPlugin(t)
+	defer os.RemoveAll(tmpDir)
+
+	pod := &v1.Pod{ObjectMeta: metav1.ObjectMeta{UID: types.UID("poduid")}}
+	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false, []string{"test-option"}), pod, volume.VolumeOptions{})
+	if err != nil {
+		t.Errorf("Failed to make a new Mounter: %v", err)
+	}
+	if mounter == nil {
+		t.Fatalf("Got a nil Mounter")
+	}
+
+	// Wrap with FakeMounter.
+	fakeMounter := &mount.FakeMounter{}
+	mounter.(*localVolumeMounter).mounter = fakeMounter
+
+	if err := mounter.SetUp(volume.MounterArgs{}); err != nil {
+		t.Errorf("Expected success, got: %v", err)
+	}
+	mountOptions := fakeMounter.MountPoints[0].Opts
+	expectedMountOptions := []string{"bind", "test-option"}
+	if !reflect.DeepEqual(mountOptions, expectedMountOptions) {
+		t.Errorf("Expected mount options to be %v got %v", expectedMountOptions, mountOptions)
+	}
+}
+
 func TestPersistentClaimReadOnlyFlag(t *testing.T) {
 	tmpDir, plug := getPlugin(t)
 	defer os.RemoveAll(tmpDir)
 
 	// Read only == true
 	pod := &v1.Pod{ObjectMeta: metav1.ObjectMeta{UID: types.UID("poduid")}}
-	mounter, err := plug.NewMounter(getTestVolume(true, tmpDir, false), pod, volume.VolumeOptions{})
+	mounter, err := plug.NewMounter(getTestVolume(true, tmpDir, false, nil), pod, volume.VolumeOptions{})
 	if err != nil {
 		t.Errorf("Failed to make a new Mounter: %v", err)
 	}
@@ -519,7 +548,7 @@ func TestPersistentClaimReadOnlyFlag(t *testing.T) {
 	}
 
 	// Read only == false
-	mounter, err = plug.NewMounter(getTestVolume(false, tmpDir, false), pod, volume.VolumeOptions{})
+	mounter, err = plug.NewMounter(getTestVolume(false, tmpDir, false, nil), pod, volume.VolumeOptions{})
 	if err != nil {
 		t.Errorf("Failed to make a new Mounter: %v", err)
 	}
@@ -540,7 +569,7 @@ func TestUnsupportedPlugins(t *testing.T) {
 
 	plugMgr := volume.VolumePluginMgr{}
 	plugMgr.InitPlugins(ProbeVolumePlugins(), nil /* prober */, volumetest.NewFakeVolumeHost(tmpDir, nil, nil))
-	spec := getTestVolume(false, tmpDir, false)
+	spec := getTestVolume(false, tmpDir, false, nil)
 
 	recyclePlug, err := plugMgr.FindRecyclablePluginBySpec(spec)
 	if err == nil && recyclePlug != nil {
@@ -573,7 +602,7 @@ func TestFilterPodMounts(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	pod := &v1.Pod{ObjectMeta: metav1.ObjectMeta{UID: types.UID("poduid")}}
-	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false), pod, volume.VolumeOptions{})
+	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false, nil), pod, volume.VolumeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,11 +21,11 @@ import (
 
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/version"
 	clientset "k8s.io/client-go/kubernetes"
 	clientsetfake "k8s.io/client-go/kubernetes/fake"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util/apiclient"
-	"k8s.io/kubernetes/pkg/util/version"
 )
 
 var cfgFiles = map[string][]byte{
@@ -40,13 +40,14 @@ kind: KubeletConfiguration
 }
 
 func TestGetFromConfigMap(t *testing.T) {
-	k8sVersion := version.MustParseGeneric("v1.12.0")
+	k8sVersion := version.MustParseGeneric(kubeadmconstants.CurrentKubernetesVersion.String())
 
 	var tests = []struct {
 		name          string
 		component     RegistrationKind
 		configMap     *fakeConfigMap
 		expectedError bool
+		expectedNil   bool
 	}{
 		{
 			name:      "valid kube-proxy",
@@ -59,10 +60,10 @@ func TestGetFromConfigMap(t *testing.T) {
 			},
 		},
 		{
-			name:          "invalid kube-proxy - missing ConfigMap",
-			component:     KubeProxyConfigurationKind,
-			configMap:     nil,
-			expectedError: true,
+			name:        "valid kube-proxy - missing ConfigMap",
+			component:   KubeProxyConfigurationKind,
+			configMap:   nil,
+			expectedNil: true,
 		},
 		{
 			name:      "invalid kube-proxy - missing key",
@@ -123,8 +124,8 @@ func TestGetFromConfigMap(t *testing.T) {
 				return
 			}
 
-			if obj == nil {
-				t.Error("unexpected nil return value")
+			if rt.expectedNil != (obj == nil) {
+				t.Error("unexpected return value")
 			}
 		})
 	}

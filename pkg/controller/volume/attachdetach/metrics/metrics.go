@@ -19,13 +19,17 @@ package metrics
 import (
 	"sync"
 
-	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
+
 	"k8s.io/apimachinery/pkg/labels"
 	corelisters "k8s.io/client-go/listers/core/v1"
+	"k8s.io/component-base/metrics"
+	"k8s.io/component-base/metrics/legacyregistry"
+	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/controller/volume/attachdetach/cache"
 	"k8s.io/kubernetes/pkg/controller/volume/attachdetach/util"
 	"k8s.io/kubernetes/pkg/volume"
+	volumeutil "k8s.io/kubernetes/pkg/volume/util"
 )
 
 const pluginNameNotAvailable = "N/A"
@@ -41,10 +45,12 @@ var (
 		"Number of volumes in A/D Controller",
 		[]string{"plugin_name", "state"}, nil)
 
-	forcedDetachMetricCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "attachdetach_controller_forced_detaches",
-			Help: "Number of times the A/D Controller performed a forced detach"})
+	forcedDetachMetricCounter = metrics.NewCounter(
+		&metrics.CounterOpts{
+			Name:           "attachdetach_controller_forced_detaches",
+			Help:           "Number of times the A/D Controller performed a forced detach",
+			StabilityLevel: metrics.ALPHA,
+		})
 )
 var registerMetrics sync.Once
 
@@ -56,13 +62,13 @@ func Register(pvcLister corelisters.PersistentVolumeClaimLister,
 	dsw cache.DesiredStateOfWorld,
 	pluginMgr *volume.VolumePluginMgr) {
 	registerMetrics.Do(func() {
-		prometheus.MustRegister(newAttachDetachStateCollector(pvcLister,
+		legacyregistry.RawMustRegister(newAttachDetachStateCollector(pvcLister,
 			podLister,
 			pvLister,
 			asw,
 			dsw,
 			pluginMgr))
-		prometheus.MustRegister(forcedDetachMetricCounter)
+		legacyregistry.MustRegister(forcedDetachMetricCounter)
 	})
 }
 
@@ -119,7 +125,7 @@ func (collector *attachDetachStateCollector) Collect(ch chan<- prometheus.Metric
 				string(nodeName),
 				pluginName)
 			if err != nil {
-				glog.Warningf("Failed to create metric : %v", err)
+				klog.Warningf("Failed to create metric : %v", err)
 			}
 			ch <- metric
 		}
@@ -134,7 +140,7 @@ func (collector *attachDetachStateCollector) Collect(ch chan<- prometheus.Metric
 				pluginName,
 				string(stateName))
 			if err != nil {
-				glog.Warningf("Failed to create metric : %v", err)
+				klog.Warningf("Failed to create metric : %v", err)
 			}
 			ch <- metric
 		}
@@ -144,7 +150,7 @@ func (collector *attachDetachStateCollector) Collect(ch chan<- prometheus.Metric
 func (collector *attachDetachStateCollector) getVolumeInUseCount() volumeCount {
 	pods, err := collector.podLister.List(labels.Everything())
 	if err != nil {
-		glog.Errorf("Error getting pod list")
+		klog.Errorf("Error getting pod list")
 		return nil
 	}
 
@@ -166,7 +172,8 @@ func (collector *attachDetachStateCollector) getVolumeInUseCount() volumeCount {
 			if err != nil {
 				continue
 			}
-			nodeVolumeMap.add(pod.Spec.NodeName, volumePlugin.GetPluginName())
+			pluginName := volumeutil.GetFullQualifiedPluginNameForVolume(volumePlugin.GetPluginName(), volumeSpec)
+			nodeVolumeMap.add(pod.Spec.NodeName, pluginName)
 		}
 	}
 	return nodeVolumeMap
@@ -178,7 +185,7 @@ func (collector *attachDetachStateCollector) getTotalVolumesCount() volumeCount 
 		if plugin, err := collector.volumePluginMgr.FindPluginBySpec(v.VolumeSpec); err == nil {
 			pluginName := pluginNameNotAvailable
 			if plugin != nil {
-				pluginName = plugin.GetPluginName()
+				pluginName = volumeutil.GetFullQualifiedPluginNameForVolume(plugin.GetPluginName(), v.VolumeSpec)
 			}
 			stateVolumeMap.add("desired_state_of_world", pluginName)
 		}
@@ -187,7 +194,7 @@ func (collector *attachDetachStateCollector) getTotalVolumesCount() volumeCount 
 		if plugin, err := collector.volumePluginMgr.FindPluginBySpec(v.VolumeSpec); err == nil {
 			pluginName := pluginNameNotAvailable
 			if plugin != nil {
-				pluginName = plugin.GetPluginName()
+				pluginName = volumeutil.GetFullQualifiedPluginNameForVolume(plugin.GetPluginName(), v.VolumeSpec)
 			}
 			stateVolumeMap.add("actual_state_of_world", pluginName)
 		}

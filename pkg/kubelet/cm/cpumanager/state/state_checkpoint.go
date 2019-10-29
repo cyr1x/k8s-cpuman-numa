@@ -21,7 +21,7 @@ import (
 	"path"
 	"sync"
 
-	"github.com/golang/glog"
+	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager/errors"
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpuset"
@@ -51,6 +51,7 @@ func NewCheckpointState(stateDir, checkpointName, policyName string) (State, err
 	}
 
 	if err := stateCheckpoint.restoreState(); err != nil {
+		//lint:ignore ST1005 user-facing error message
 		return nil, fmt.Errorf("could not restore state from checkpoint: %v\n"+
 			"Please drain this node and delete the CPU manager checkpoint file %q before restarting Kubelet.",
 			err, path.Join(stateDir, checkpointName))
@@ -97,8 +98,8 @@ func (sc *stateCheckpoint) restoreState() error {
 	sc.cache.SetDefaultCPUSet(tmpDefaultCPUSet)
 	sc.cache.SetCPUAssignments(tmpAssignments)
 
-	glog.V(2).Info("[cpumanager] state checkpoint: restored state from checkpoint")
-	glog.V(2).Infof("[cpumanager] state checkpoint: defaultCPUSet: %s", tmpDefaultCPUSet.String())
+	klog.V(2).Info("[cpumanager] state checkpoint: restored state from checkpoint")
+	klog.V(2).Infof("[cpumanager] state checkpoint: defaultCPUSet: %s", tmpDefaultCPUSet.String())
 
 	return nil
 }

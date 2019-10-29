@@ -20,9 +20,8 @@ import (
 	"testing"
 	"time"
 
-	apimachinery "k8s.io/apimachinery/pkg/apis/config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	apiserver "k8s.io/apiserver/pkg/apis/config"
+	componentbaseconfig "k8s.io/component-base/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 )
 
@@ -33,7 +32,7 @@ func TestValidateKubeSchedulerConfiguration(t *testing.T) {
 		HealthzBindAddress:             "0.0.0.0:10254",
 		MetricsBindAddress:             "0.0.0.0:10254",
 		HardPodAffinitySymmetricWeight: 80,
-		ClientConnection: apimachinery.ClientConnectionConfiguration{
+		ClientConnection: componentbaseconfig.ClientConnectionConfiguration{
 			AcceptContentTypes: "application/json",
 			ContentType:        "application/json",
 			QPS:                10,
@@ -48,17 +47,18 @@ func TestValidateKubeSchedulerConfiguration(t *testing.T) {
 			},
 		},
 		LeaderElection: config.KubeSchedulerLeaderElectionConfiguration{
-			LockObjectNamespace: "name",
-			LockObjectName:      "name",
-			LeaderElectionConfiguration: apiserver.LeaderElectionConfiguration{
-				ResourceLock:  "configmap",
-				LeaderElect:   true,
-				LeaseDuration: metav1.Duration{Duration: 30 * time.Second},
-				RenewDeadline: metav1.Duration{Duration: 15 * time.Second},
-				RetryPeriod:   metav1.Duration{Duration: 5 * time.Second},
+			LeaderElectionConfiguration: componentbaseconfig.LeaderElectionConfiguration{
+				ResourceLock:      "configmap",
+				LeaderElect:       true,
+				LeaseDuration:     metav1.Duration{Duration: 30 * time.Second},
+				RenewDeadline:     metav1.Duration{Duration: 15 * time.Second},
+				RetryPeriod:       metav1.Duration{Duration: 5 * time.Second},
+				ResourceNamespace: "name",
+				ResourceName:      "name",
 			},
 		},
-		BindTimeoutSeconds: &testTimeout,
+		BindTimeoutSeconds:       &testTimeout,
+		PercentageOfNodesToScore: 35,
 	}
 
 	HardPodAffinitySymmetricWeightGt100 := validConfig.DeepCopy()
@@ -67,11 +67,11 @@ func TestValidateKubeSchedulerConfiguration(t *testing.T) {
 	HardPodAffinitySymmetricWeightLt0 := validConfig.DeepCopy()
 	HardPodAffinitySymmetricWeightLt0.HardPodAffinitySymmetricWeight = -1
 
-	lockObjectNameNotSet := validConfig.DeepCopy()
-	lockObjectNameNotSet.LeaderElection.LockObjectName = ""
+	resourceNameNotSet := validConfig.DeepCopy()
+	resourceNameNotSet.LeaderElection.ResourceName = ""
 
-	lockObjectNamespaceNotSet := validConfig.DeepCopy()
-	lockObjectNamespaceNotSet.LeaderElection.LockObjectNamespace = ""
+	resourceNamespaceNotSet := validConfig.DeepCopy()
+	resourceNamespaceNotSet.LeaderElection.ResourceNamespace = ""
 
 	metricsBindAddrHostInvalid := validConfig.DeepCopy()
 	metricsBindAddrHostInvalid.MetricsBindAddress = "0.0.0.0.0:9090"
@@ -92,6 +92,9 @@ func TestValidateKubeSchedulerConfiguration(t *testing.T) {
 	bindTimeoutUnset := validConfig.DeepCopy()
 	bindTimeoutUnset.BindTimeoutSeconds = nil
 
+	percentageOfNodesToScore101 := validConfig.DeepCopy()
+	percentageOfNodesToScore101.PercentageOfNodesToScore = int32(101)
+
 	scenarios := map[string]struct {
 		expectedToFail bool
 		config         *config.KubeSchedulerConfiguration
@@ -100,13 +103,13 @@ func TestValidateKubeSchedulerConfiguration(t *testing.T) {
 			expectedToFail: false,
 			config:         validConfig,
 		},
-		"bad-lock-object-names-not-set": {
+		"bad-resource-name-not-set": {
 			expectedToFail: true,
-			config:         lockObjectNameNotSet,
+			config:         resourceNameNotSet,
 		},
-		"bad-lock-object-namespace-not-set": {
+		"bad-resource-namespace-not-set": {
 			expectedToFail: true,
-			config:         lockObjectNamespaceNotSet,
+			config:         resourceNamespaceNotSet,
 		},
 		"bad-healthz-port-invalid": {
 			expectedToFail: true,
@@ -135,6 +138,10 @@ func TestValidateKubeSchedulerConfiguration(t *testing.T) {
 		"bind-timeout-unset": {
 			expectedToFail: true,
 			config:         bindTimeoutUnset,
+		},
+		"bad-percentage-of-nodes-to-score": {
+			expectedToFail: true,
+			config:         percentageOfNodesToScore101,
 		},
 	}
 

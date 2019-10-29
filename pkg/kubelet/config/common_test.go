@@ -37,6 +37,7 @@ func noDefault(*core.Pod) error { return nil }
 
 func TestDecodeSinglePod(t *testing.T) {
 	grace := int64(30)
+	enableServiceLinks := v1.DefaultEnableServiceLinks
 	pod := &v1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "",
@@ -58,8 +59,17 @@ func TestDecodeSinglePod(t *testing.T) {
 				TerminationMessagePolicy: v1.TerminationMessageReadFile,
 				SecurityContext:          securitycontext.ValidSecurityContextWithContainerDefaults(),
 			}},
-			SecurityContext: &v1.PodSecurityContext{},
-			SchedulerName:   core.DefaultSchedulerName,
+			SecurityContext:    &v1.PodSecurityContext{},
+			SchedulerName:      core.DefaultSchedulerName,
+			EnableServiceLinks: &enableServiceLinks,
+		},
+		Status: v1.PodStatus{
+			PodIP: "1.2.3.4",
+			PodIPs: []v1.PodIP{
+				{
+					IP: "1.2.3.4",
+				},
+			},
 		},
 	}
 	json, err := runtime.Encode(testapi.Default.Codec(), pod)
@@ -99,6 +109,7 @@ func TestDecodeSinglePod(t *testing.T) {
 
 func TestDecodePodList(t *testing.T) {
 	grace := int64(30)
+	enableServiceLinks := v1.DefaultEnableServiceLinks
 	pod := &v1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "",
@@ -121,8 +132,17 @@ func TestDecodePodList(t *testing.T) {
 
 				SecurityContext: securitycontext.ValidSecurityContextWithContainerDefaults(),
 			}},
-			SecurityContext: &v1.PodSecurityContext{},
-			SchedulerName:   core.DefaultSchedulerName,
+			SecurityContext:    &v1.PodSecurityContext{},
+			SchedulerName:      core.DefaultSchedulerName,
+			EnableServiceLinks: &enableServiceLinks,
+		},
+		Status: v1.PodStatus{
+			PodIP: "1.2.3.4",
+			PodIPs: []v1.PodIP{
+				{
+					IP: "1.2.3.4",
+				},
+			},
 		},
 	}
 	podList := &v1.PodList{

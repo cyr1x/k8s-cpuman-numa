@@ -70,13 +70,13 @@ func CheckAfterTest(d time.Duration) error {
 	}
 	var bad string
 	badSubstring := map[string]string{
-		").writeLoop(":                                 "a Transport",
+		").writeLoop(": "a Transport",
 		"created by net/http/httptest.(*Server).Start": "an httptest.Server",
-		"timeoutHandler":                               "a TimeoutHandler",
-		"net.(*netFD).connect(":                        "a timing out dial",
-		").noteClientGone(":                            "a closenotifier sender",
-		").readLoop(":                                  "a Transport",
-		".grpc":                                        "a gRPC resource",
+		"timeoutHandler":        "a TimeoutHandler",
+		"net.(*netFD).connect(": "a timing out dial",
+		").noteClientGone(":     "a closenotifier sender",
+		").readLoop(":           "a Transport",
+		".grpc":                 "a gRPC resource",
 	}
 
 	var stacks string
@@ -119,6 +119,7 @@ func interestingGoroutines() (gs []string) {
 		stack := strings.TrimSpace(sl[1])
 		if stack == "" ||
 			strings.Contains(stack, "sync.(*WaitGroup).Done") ||
+			strings.Contains(stack, "os.(*file).close") ||
 			strings.Contains(stack, "created by os/signal.init") ||
 			strings.Contains(stack, "runtime/panic.go") ||
 			strings.Contains(stack, "created by testing.RunTests") ||
@@ -134,5 +135,5 @@ func interestingGoroutines() (gs []string) {
 		gs = append(gs, stack)
 	}
 	sort.Strings(gs)
-	return
+	return gs
 }

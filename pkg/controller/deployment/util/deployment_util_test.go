@@ -151,6 +151,7 @@ func randomUID() types.UID {
 func generateDeployment(image string) apps.Deployment {
 	podLabels := map[string]string{"name": image}
 	terminationSec := int64(30)
+	enableServiceLinks := v1.DefaultEnableServiceLinks
 	return apps.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        image,
@@ -176,6 +177,7 @@ func generateDeployment(image string) apps.Deployment {
 					TerminationGracePeriodSeconds: &terminationSec,
 					RestartPolicy:                 v1.RestartPolicyAlways,
 					SecurityContext:               &v1.PodSecurityContext{},
+					EnableServiceLinks:            &enableServiceLinks,
 				},
 			},
 		},
@@ -504,7 +506,6 @@ func TestFindOldReplicaSets(t *testing.T) {
 		Name            string
 		deployment      apps.Deployment
 		rsList          []*apps.ReplicaSet
-		podList         *v1.PodList
 		expected        []*apps.ReplicaSet
 		expectedRequire []*apps.ReplicaSet
 	}{
@@ -1273,13 +1274,19 @@ func TestAnnotationUtils(t *testing.T) {
 
 	//Test Case 1: Check if anotations are copied properly from deployment to RS
 	t.Run("SetNewReplicaSetAnnotations", func(t *testing.T) {
-		//Try to set the increment revision from 1 through 20
-		for i := 0; i < 20; i++ {
+		//Try to set the increment revision from 11 through 20
+		for i := 10; i < 20; i++ {
 
 			nextRevision := fmt.Sprintf("%d", i+1)
-			SetNewReplicaSetAnnotations(&tDeployment, &tRS, nextRevision, true)
+			SetNewReplicaSetAnnotations(&tDeployment, &tRS, nextRevision, true, 5)
 			//Now the ReplicaSets Revision Annotation should be i+1
 
+			if i >= 12 {
+				expectedHistoryAnnotation := fmt.Sprintf("%d,%d", i-1, i)
+				if tRS.Annotations[RevisionHistoryAnnotation] != expectedHistoryAnnotation {
+					t.Errorf("Revision History Expected=%s Obtained=%s", expectedHistoryAnnotation, tRS.Annotations[RevisionHistoryAnnotation])
+				}
+			}
 			if tRS.Annotations[RevisionAnnotation] != nextRevision {
 				t.Errorf("Revision Expected=%s Obtained=%s", nextRevision, tRS.Annotations[RevisionAnnotation])
 			}

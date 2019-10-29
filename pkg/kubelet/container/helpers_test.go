@@ -20,10 +20,14 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	"k8s.io/kubernetes/pkg/features"
 )
 
 func TestEnvVarsToMap(t *testing.T) {
@@ -145,19 +149,21 @@ func TestExpandVolumeMountsWithSubpath(t *testing.T) {
 		envs              []EnvVar
 		expectedSubPath   string
 		expectedMountPath string
+		expectedOk        bool
 	}{
 		{
 			name: "subpath with no expansion",
 			container: &v1.Container{
-				VolumeMounts: []v1.VolumeMount{{SubPath: "foo"}},
+				VolumeMounts: []v1.VolumeMount{{SubPathExpr: "foo"}},
 			},
 			expectedSubPath:   "foo",
 			expectedMountPath: "",
+			expectedOk:        true,
 		},
 		{
 			name: "volumes with expanded subpath",
 			container: &v1.Container{
-				VolumeMounts: []v1.VolumeMount{{SubPath: "foo/$(POD_NAME)"}},
+				VolumeMounts: []v1.VolumeMount{{SubPathExpr: "foo/$(POD_NAME)"}},
 			},
 			envs: []EnvVar{
 				{
@@ -167,11 +173,12 @@ func TestExpandVolumeMountsWithSubpath(t *testing.T) {
 			},
 			expectedSubPath:   "foo/bar",
 			expectedMountPath: "",
+			expectedOk:        true,
 		},
 		{
 			name: "volumes expanded with empty subpath",
 			container: &v1.Container{
-				VolumeMounts: []v1.VolumeMount{{SubPath: ""}},
+				VolumeMounts: []v1.VolumeMount{{SubPathExpr: ""}},
 			},
 			envs: []EnvVar{
 				{
@@ -181,19 +188,21 @@ func TestExpandVolumeMountsWithSubpath(t *testing.T) {
 			},
 			expectedSubPath:   "",
 			expectedMountPath: "",
+			expectedOk:        true,
 		},
 		{
 			name: "volumes expanded with no envs subpath",
 			container: &v1.Container{
-				VolumeMounts: []v1.VolumeMount{{SubPath: "/foo/$(POD_NAME)"}},
+				VolumeMounts: []v1.VolumeMount{{SubPathExpr: "/foo/$(POD_NAME)"}},
 			},
 			expectedSubPath:   "/foo/$(POD_NAME)",
 			expectedMountPath: "",
+			expectedOk:        false,
 		},
 		{
 			name: "volumes expanded with leading environment variable",
 			container: &v1.Container{
-				VolumeMounts: []v1.VolumeMount{{SubPath: "$(POD_NAME)/bar"}},
+				VolumeMounts: []v1.VolumeMount{{SubPathExpr: "$(POD_NAME)/bar"}},
 			},
 			envs: []EnvVar{
 				{
@@ -203,11 +212,12 @@ func TestExpandVolumeMountsWithSubpath(t *testing.T) {
 			},
 			expectedSubPath:   "foo/bar",
 			expectedMountPath: "",
+			expectedOk:        true,
 		},
 		{
 			name: "volumes with volume and subpath",
 			container: &v1.Container{
-				VolumeMounts: []v1.VolumeMount{{MountPath: "/foo", SubPath: "$(POD_NAME)/bar"}},
+				VolumeMounts: []v1.VolumeMount{{MountPath: "/foo", SubPathExpr: "$(POD_NAME)/bar"}},
 			},
 			envs: []EnvVar{
 				{
@@ -217,6 +227,7 @@ func TestExpandVolumeMountsWithSubpath(t *testing.T) {
 			},
 			expectedSubPath:   "foo/bar",
 			expectedMountPath: "/foo",
+			expectedOk:        true,
 		},
 		{
 			name: "volumes with volume and no subpath",
@@ -231,11 +242,78 @@ func TestExpandVolumeMountsWithSubpath(t *testing.T) {
 			},
 			expectedSubPath:   "",
 			expectedMountPath: "/foo",
+			expectedOk:        true,
+		},
+		{
+			name: "subpaths with empty environment variable",
+			container: &v1.Container{
+				VolumeMounts: []v1.VolumeMount{{SubPathExpr: "foo/$(POD_NAME)/$(ANNOTATION)"}},
+			},
+			envs: []EnvVar{
+				{
+					Name:  "ANNOTATION",
+					Value: "",
+				},
+			},
+			expectedSubPath:   "foo/$(POD_NAME)/$(ANNOTATION)",
+			expectedMountPath: "",
+			expectedOk:        false,
+		},
+		{
+			name: "subpaths with missing env variables",
+			container: &v1.Container{
+				VolumeMounts: []v1.VolumeMount{{SubPathExpr: "foo/$(ODD_NAME)/$(POD_NAME)"}},
+			},
+			envs: []EnvVar{
+				{
+					Name:  "ODD_NAME",
+					Value: "bar",
+				},
+			},
+			expectedSubPath:   "foo/$(ODD_NAME)/$(POD_NAME)",
+			expectedMountPath: "",
+			expectedOk:        false,
+		},
+		{
+			name: "subpaths with empty expansion",
+			container: &v1.Container{
+				VolumeMounts: []v1.VolumeMount{{SubPathExpr: "$()"}},
+			},
+			expectedSubPath:   "$()",
+			expectedMountPath: "",
+			expectedOk:        false,
+		},
+		{
+			name: "subpaths with nested expandable envs",
+			container: &v1.Container{
+				VolumeMounts: []v1.VolumeMount{{SubPathExpr: "$(POD_NAME$(ANNOTATION))"}},
+			},
+			envs: []EnvVar{
+				{
+					Name:  "POD_NAME",
+					Value: "foo",
+				},
+				{
+					Name:  "ANNOTATION",
+					Value: "bar",
+				},
+			},
+			expectedSubPath:   "$(POD_NAME$(ANNOTATION))",
+			expectedMountPath: "",
+			expectedOk:        false,
 		},
 	}
 
 	for _, tc := range cases {
-		actualSubPath := ExpandContainerVolumeMounts(tc.container.VolumeMounts[0], tc.envs)
+		actualSubPath, err := ExpandContainerVolumeMounts(tc.container.VolumeMounts[0], tc.envs)
+		ok := err == nil
+		if e, a := tc.expectedOk, ok; !reflect.DeepEqual(e, a) {
+			t.Errorf("%v: unexpected validation failure of subpath; expected %v, got %v", tc.name, e, a)
+		}
+		if !ok {
+			// if ExpandContainerVolumeMounts returns an error, we don't care what the actualSubPath value is
+			continue
+		}
 		if e, a := tc.expectedSubPath, actualSubPath; !reflect.DeepEqual(e, a) {
 			t.Errorf("%v: unexpected subpath; expected %v, got %v", tc.name, e, a)
 		}
@@ -244,6 +322,74 @@ func TestExpandVolumeMountsWithSubpath(t *testing.T) {
 		}
 	}
 
+}
+
+func TestGetContainerSpec(t *testing.T) {
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.EphemeralContainers, true)()
+	for _, tc := range []struct {
+		name          string
+		havePod       *v1.Pod
+		haveName      string
+		wantContainer *v1.Container
+	}{
+		{
+			name: "regular container",
+			havePod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{Name: "plain-ole-container"},
+					},
+					InitContainers: []v1.Container{
+						{Name: "init-container"},
+					},
+				},
+			},
+			haveName:      "plain-ole-container",
+			wantContainer: &v1.Container{Name: "plain-ole-container"},
+		},
+		{
+			name: "init container",
+			havePod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{Name: "plain-ole-container"},
+					},
+					InitContainers: []v1.Container{
+						{Name: "init-container"},
+					},
+				},
+			},
+			haveName:      "init-container",
+			wantContainer: &v1.Container{Name: "init-container"},
+		},
+		{
+			name: "ephemeral container",
+			havePod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{Name: "plain-ole-container"},
+					},
+					InitContainers: []v1.Container{
+						{Name: "init-container"},
+					},
+					EphemeralContainers: []v1.EphemeralContainer{
+						{EphemeralContainerCommon: v1.EphemeralContainerCommon{
+							Name: "debug-container",
+						}},
+					},
+				},
+			},
+			haveName:      "debug-container",
+			wantContainer: &v1.Container{Name: "debug-container"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotContainer := GetContainerSpec(tc.havePod, tc.haveName)
+			if diff := cmp.Diff(tc.wantContainer, gotContainer); diff != "" {
+				t.Fatalf("GetContainerSpec for %q returned diff (-want +got):%v", tc.name, diff)
+			}
+		})
+	}
 }
 
 func TestShouldContainerBeRestarted(t *testing.T) {
@@ -426,5 +572,39 @@ func TestMakePortMappings(t *testing.T) {
 	for i, tt := range tests {
 		actual := MakePortMappings(tt.container)
 		assert.Equal(t, tt.expectedPortMappings, actual, "[%d]", i)
+	}
+}
+
+func TestHashContainer(t *testing.T) {
+	testCases := []struct {
+		name          string
+		image         string
+		args          []string
+		containerPort int32
+		expectedHash  uint64
+	}{
+		{
+			name:  "test_container",
+			image: "foo/image:v1",
+			args: []string{
+				"/bin/sh",
+				"-c",
+				"echo abc",
+			},
+			containerPort: int32(8001),
+			expectedHash:  uint64(0x3c42280f),
+		},
+	}
+
+	for _, tc := range testCases {
+		container := v1.Container{
+			Name:  tc.name,
+			Image: tc.image,
+			Args:  tc.args,
+			Ports: []v1.ContainerPort{{ContainerPort: tc.containerPort}},
+		}
+
+		hashVal := HashContainer(&container)
+		assert.Equal(t, tc.expectedHash, hashVal, "the hash value here should not be changed.")
 	}
 }

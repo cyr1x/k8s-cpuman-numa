@@ -284,17 +284,17 @@ func TestHostportManager(t *testing.T) {
 	err := iptables.SaveInto(utiliptables.TableNAT, raw)
 	assert.NoError(t, err)
 
-	lines := strings.Split(string(raw.Bytes()), "\n")
+	lines := strings.Split(raw.String(), "\n")
 	expectedLines := map[string]bool{
-		`*nat`: true,
-		`:KUBE-HOSTPORTS - [0:0]`:                                                                                                          true,
-		`:OUTPUT - [0:0]`:                                                                                                                  true,
-		`:PREROUTING - [0:0]`:                                                                                                              true,
-		`:POSTROUTING - [0:0]`:                                                                                                             true,
-		`:KUBE-HP-IJHALPHTORMHHPPK - [0:0]`:                                                                                                true,
-		`:KUBE-HP-63UPIDJXVRSZGSUZ - [0:0]`:                                                                                                true,
-		`:KUBE-HP-WFBOALXEP42XEMJK - [0:0]`:                                                                                                true,
-		`:KUBE-HP-XU6AWMMJYOZOFTFZ - [0:0]`:                                                                                                true,
+		`*nat`:                              true,
+		`:KUBE-HOSTPORTS - [0:0]`:           true,
+		`:OUTPUT - [0:0]`:                   true,
+		`:PREROUTING - [0:0]`:               true,
+		`:POSTROUTING - [0:0]`:              true,
+		`:KUBE-HP-IJHALPHTORMHHPPK - [0:0]`: true,
+		`:KUBE-HP-63UPIDJXVRSZGSUZ - [0:0]`: true,
+		`:KUBE-HP-WFBOALXEP42XEMJK - [0:0]`: true,
+		`:KUBE-HP-XU6AWMMJYOZOFTFZ - [0:0]`: true,
 		"-A KUBE-HOSTPORTS -m comment --comment \"pod3_ns1 hostport 8443\" -m tcp -p tcp --dport 8443 -j KUBE-HP-WFBOALXEP42XEMJK":         true,
 		"-A KUBE-HOSTPORTS -m comment --comment \"pod1_ns1 hostport 8081\" -m udp -p udp --dport 8081 -j KUBE-HP-63UPIDJXVRSZGSUZ":         true,
 		"-A KUBE-HOSTPORTS -m comment --comment \"pod1_ns1 hostport 8080\" -m tcp -p tcp --dport 8080 -j KUBE-HP-IJHALPHTORMHHPPK":         true,
@@ -331,7 +331,7 @@ func TestHostportManager(t *testing.T) {
 	raw.Reset()
 	err = iptables.SaveInto(utiliptables.TableNAT, raw)
 	assert.NoError(t, err)
-	lines = strings.Split(string(raw.Bytes()), "\n")
+	lines = strings.Split(raw.String(), "\n")
 	remainingChains := make(map[string]bool)
 	for _, line := range lines {
 		if strings.HasPrefix(line, ":") {

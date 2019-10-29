@@ -23,7 +23,7 @@ import (
 	"time"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2beta2"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta/testrestmapper"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +34,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	core "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/controller"
 	metricsclient "k8s.io/kubernetes/pkg/controller/podautoscaler/metrics"
@@ -64,6 +65,7 @@ type metricType int
 
 const (
 	objectMetric metricType = iota
+	objectPerPodMetric
 	externalMetric
 	externalPerPodMetric
 	podMetric
@@ -348,7 +350,7 @@ func (tc *replicaCalcTestCase) runTest(t *testing.T) {
 	stop := make(chan struct{})
 	defer close(stop)
 	informerFactory.Start(stop)
-	if !controller.WaitForCacheSync("HPA", stop, informer.Informer().HasSynced) {
+	if !cache.WaitForNamedCacheSync("HPA", stop, informer.Informer().HasSynced) {
 		return
 	}
 
@@ -384,6 +386,11 @@ func (tc *replicaCalcTestCase) runTest(t *testing.T) {
 			t.Fatal("Metric specified as objectMetric but metric.singleObject is nil.")
 		}
 		outReplicas, outUtilization, outTimestamp, err = replicaCalc.GetObjectMetricReplicas(tc.currentReplicas, tc.metric.targetUtilization, tc.metric.name, testNamespace, tc.metric.singleObject, selector, nil)
+	case objectPerPodMetric:
+		if tc.metric.singleObject == nil {
+			t.Fatal("Metric specified as objectMetric but metric.singleObject is nil.")
+		}
+		outReplicas, outUtilization, outTimestamp, err = replicaCalc.GetObjectPerPodMetricReplicas(tc.currentReplicas, tc.metric.perPodTargetUtilization, tc.metric.name, testNamespace, tc.metric.singleObject, nil)
 	case externalMetric:
 		if tc.metric.selector == nil {
 			t.Fatal("Metric specified as externalMetric but metric.selector is nil.")
@@ -623,7 +630,27 @@ func TestReplicaCalcScaleUpCMObject(t *testing.T) {
 			expectedUtilization: 20000,
 			singleObject: &autoscalingv2.CrossVersionObjectReference{
 				Kind:       "Deployment",
-				APIVersion: "extensions/v1beta1",
+				APIVersion: "apps/v1",
+				Name:       "some-deployment",
+			},
+		},
+	}
+	tc.runTest(t)
+}
+
+func TestReplicaCalcScaleUpCMPerPodObject(t *testing.T) {
+	tc := replicaCalcTestCase{
+		currentReplicas:  3,
+		expectedReplicas: 4,
+		metric: &metricInfo{
+			metricType:              objectPerPodMetric,
+			name:                    "qps",
+			levels:                  []int64{20000},
+			perPodTargetUtilization: 5000,
+			expectedUtilization:     6667,
+			singleObject: &autoscalingv2.CrossVersionObjectReference{
+				Kind:       "Deployment",
+				APIVersion: "apps/v1",
 				Name:       "some-deployment",
 			},
 		},
@@ -643,7 +670,7 @@ func TestReplicaCalcScaleUpCMObjectIgnoresUnreadyPods(t *testing.T) {
 			expectedUtilization: 50000,
 			singleObject: &autoscalingv2.CrossVersionObjectReference{
 				Kind:       "Deployment",
-				APIVersion: "extensions/v1beta1",
+				APIVersion: "apps/v1",
 				Name:       "some-deployment",
 			},
 		},
@@ -747,6 +774,26 @@ func TestReplicaCalcScaleDownCM(t *testing.T) {
 	tc.runTest(t)
 }
 
+func TestReplicaCalcScaleDownPerPodCMObject(t *testing.T) {
+	tc := replicaCalcTestCase{
+		currentReplicas:  5,
+		expectedReplicas: 3,
+		metric: &metricInfo{
+			name:                    "qps",
+			levels:                  []int64{6000},
+			perPodTargetUtilization: 2000,
+			expectedUtilization:     1200,
+			singleObject: &autoscalingv2.CrossVersionObjectReference{
+				Kind:       "Deployment",
+				APIVersion: "apps/v1",
+				Name:       "some-deployment",
+			},
+			metricType: objectPerPodMetric,
+		},
+	}
+	tc.runTest(t)
+}
+
 func TestReplicaCalcScaleDownCMObject(t *testing.T) {
 	tc := replicaCalcTestCase{
 		currentReplicas:  5,
@@ -758,7 +805,7 @@ func TestReplicaCalcScaleDownCMObject(t *testing.T) {
 			expectedUtilization: 12000,
 			singleObject: &autoscalingv2.CrossVersionObjectReference{
 				Kind:       "Deployment",
-				APIVersion: "extensions/v1beta1",
+				APIVersion: "apps/v1",
 				Name:       "some-deployment",
 			},
 		},
@@ -811,6 +858,25 @@ func TestReplicaCalcScaleDownIncludeUnreadyPods(t *testing.T) {
 			targetUtilization:   50,
 			expectedUtilization: 30,
 			expectedValue:       numContainersPerPod * 300,
+		},
+	}
+	tc.runTest(t)
+}
+
+func TestReplicaCalcScaleDownExcludeUnscheduledPods(t *testing.T) {
+	tc := replicaCalcTestCase{
+		currentReplicas:  5,
+		expectedReplicas: 1,
+		podReadiness:     []v1.ConditionStatus{v1.ConditionTrue, v1.ConditionFalse, v1.ConditionFalse, v1.ConditionFalse, v1.ConditionFalse},
+		podPhase:         []v1.PodPhase{v1.PodRunning, v1.PodPending, v1.PodPending, v1.PodPending, v1.PodPending},
+		resource: &resourceInfo{
+			name:     v1.ResourceCPU,
+			requests: []resource.Quantity{resource.MustParse("1.0"), resource.MustParse("1.0"), resource.MustParse("1.0"), resource.MustParse("1.0"), resource.MustParse("1.0")},
+			levels:   []int64{100},
+
+			targetUtilization:   50,
+			expectedUtilization: 10,
+			expectedValue:       numContainersPerPod * 100,
 		},
 	}
 	tc.runTest(t)
@@ -916,7 +982,27 @@ func TestReplicaCalcToleranceCMObject(t *testing.T) {
 			expectedUtilization: 20666,
 			singleObject: &autoscalingv2.CrossVersionObjectReference{
 				Kind:       "Deployment",
-				APIVersion: "extensions/v1beta1",
+				APIVersion: "apps/v1",
+				Name:       "some-deployment",
+			},
+		},
+	}
+	tc.runTest(t)
+}
+
+func TestReplicaCalcTolerancePerPodCMObject(t *testing.T) {
+	tc := replicaCalcTestCase{
+		currentReplicas:  4,
+		expectedReplicas: 4,
+		metric: &metricInfo{
+			metricType:              objectPerPodMetric,
+			name:                    "qps",
+			levels:                  []int64{20166},
+			perPodTargetUtilization: 5000,
+			expectedUtilization:     5042,
+			singleObject: &autoscalingv2.CrossVersionObjectReference{
+				Kind:       "Deployment",
+				APIVersion: "apps/v1",
 				Name:       "some-deployment",
 			},
 		},
@@ -1550,18 +1636,38 @@ func TestGroupPods(t *testing.T) {
 			sets.NewString("lucretius"),
 			sets.NewString("epicurus"),
 		},
+		{
+			name: "pending pods are ignored",
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "unscheduled",
+					},
+					Status: v1.PodStatus{
+						Phase: v1.PodPending,
+					},
+				},
+			},
+			metrics:             metricsclient.PodMetricsInfo{},
+			resource:            v1.ResourceCPU,
+			expectReadyPodCount: 0,
+			expectIgnoredPods:   sets.NewString("unscheduled"),
+			expectMissingPods:   sets.NewString(),
+		},
 	}
 	for _, tc := range tests {
-		readyPodCount, ignoredPods, missingPods := groupPods(tc.pods, tc.metrics, tc.resource, defaultTestingCpuInitializationPeriod, defaultTestingDelayOfInitialReadinessStatus)
-		if readyPodCount != tc.expectReadyPodCount {
-			t.Errorf("%s got readyPodCount %d, expected %d", tc.name, readyPodCount, tc.expectReadyPodCount)
-		}
-		if !ignoredPods.Equal(tc.expectIgnoredPods) {
-			t.Errorf("%s got unreadyPods %v, expected %v", tc.name, ignoredPods, tc.expectIgnoredPods)
-		}
-		if !missingPods.Equal(tc.expectMissingPods) {
-			t.Errorf("%s got missingPods %v, expected %v", tc.name, missingPods, tc.expectMissingPods)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			readyPodCount, ignoredPods, missingPods := groupPods(tc.pods, tc.metrics, tc.resource, defaultTestingCpuInitializationPeriod, defaultTestingDelayOfInitialReadinessStatus)
+			if readyPodCount != tc.expectReadyPodCount {
+				t.Errorf("%s got readyPodCount %d, expected %d", tc.name, readyPodCount, tc.expectReadyPodCount)
+			}
+			if !ignoredPods.Equal(tc.expectIgnoredPods) {
+				t.Errorf("%s got unreadyPods %v, expected %v", tc.name, ignoredPods, tc.expectIgnoredPods)
+			}
+			if !missingPods.Equal(tc.expectMissingPods) {
+				t.Errorf("%s got missingPods %v, expected %v", tc.name, missingPods, tc.expectMissingPods)
+			}
+		})
 	}
 }
 

@@ -25,14 +25,14 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/golang/glog"
 	"k8s.io/api/core/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/klog"
 	iptablesproxy "k8s.io/kubernetes/pkg/proxy/iptables"
 	"k8s.io/kubernetes/pkg/util/conntrack"
 	utiliptables "k8s.io/kubernetes/pkg/util/iptables"
-	utilnet "k8s.io/kubernetes/pkg/util/net"
 	"k8s.io/utils/exec"
+	utilnet "k8s.io/utils/net"
 )
 
 // HostPortManager is an interface for adding and removing hostport for a given pod sandbox.
@@ -40,7 +40,7 @@ type HostPortManager interface {
 	// Add implements port mappings.
 	// id should be a unique identifier for a pod, e.g. podSandboxID.
 	// podPortMapping is the associated port mapping information for the pod.
-	// natInterfaceName is the interface that localhost used to talk to the given pod.
+	// natInterfaceName is the interface that localhost uses to talk to the given pod, if known.
 	Add(id string, podPortMapping *PodPortMapping, natInterfaceName string) error
 	// Remove cleans up matching port mappings
 	// Remove must be able to clean up port mappings without pod IP
@@ -65,7 +65,7 @@ func NewHostportManager(iptables utiliptables.Interface) HostPortManager {
 	}
 	h.conntrackFound = conntrack.Exists(h.execer)
 	if !h.conntrackFound {
-		glog.Warningf("The binary conntrack is not installed, this can cause failures in network connection cleanup.")
+		klog.Warningf("The binary conntrack is not installed, this can cause failures in network connection cleanup.")
 	}
 	return h
 }
@@ -173,11 +173,11 @@ func (hm *hostportManager) Add(id string, podPortMapping *PodPortMapping, natInt
 	// create a new conntrack entry without any DNAT. That will result in blackhole of the traffic even after correct
 	// iptables rules have been added back.
 	if hm.execer != nil && hm.conntrackFound {
-		glog.Infof("Starting to delete udp conntrack entries: %v, isIPv6 - %v", conntrackPortsToRemove, isIpv6)
+		klog.Infof("Starting to delete udp conntrack entries: %v, isIPv6 - %v", conntrackPortsToRemove, isIpv6)
 		for _, port := range conntrackPortsToRemove {
 			err = conntrack.ClearEntriesForPort(hm.execer, port, isIpv6, v1.ProtocolUDP)
 			if err != nil {
-				glog.Errorf("Failed to clear udp conntrack for port %d, error: %v", port, err)
+				klog.Errorf("Failed to clear udp conntrack for port %d, error: %v", port, err)
 			}
 		}
 	}
@@ -246,10 +246,10 @@ func (hm *hostportManager) Remove(id string, podPortMapping *PodPortMapping) (er
 
 // syncIPTables executes iptables-restore with given lines
 func (hm *hostportManager) syncIPTables(lines []byte) error {
-	glog.V(3).Infof("Restoring iptables rules: %s", lines)
+	klog.V(3).Infof("Restoring iptables rules: %s", lines)
 	err := hm.iptables.RestoreAll(lines, utiliptables.NoFlushTables, utiliptables.RestoreCounters)
 	if err != nil {
-		return fmt.Errorf("Failed to execute iptables-restore: %v", err)
+		return fmt.Errorf("failed to execute iptables-restore: %v", err)
 	}
 	return nil
 }
@@ -283,7 +283,7 @@ func (hm *hostportManager) openHostports(podPortMapping *PodPortMapping) (map[ho
 	if retErr != nil {
 		for hp, socket := range ports {
 			if err := socket.Close(); err != nil {
-				glog.Errorf("Cannot clean up hostport %d for pod %s: %v", hp.port, getPodFullName(podPortMapping), err)
+				klog.Errorf("Cannot clean up hostport %d for pod %s: %v", hp.port, getPodFullName(podPortMapping), err)
 			}
 		}
 		return nil, retErr
@@ -297,7 +297,7 @@ func (hm *hostportManager) closeHostports(hostportMappings []*PortMapping) error
 	for _, pm := range hostportMappings {
 		hp := portMappingToHostport(pm)
 		if socket, ok := hm.hostPortMap[hp]; ok {
-			glog.V(2).Infof("Closing host port %s", hp.String())
+			klog.V(2).Infof("Closing host port %s", hp.String())
 			if err := socket.Close(); err != nil {
 				errList = append(errList, fmt.Errorf("failed to close host port %s: %v", hp.String(), err))
 				continue
@@ -351,7 +351,7 @@ func getExistingHostportIPTablesRules(iptables utiliptables.Interface) (map[util
 		}
 	}
 
-	for _, line := range strings.Split(string(iptablesData.Bytes()), "\n") {
+	for _, line := range strings.Split(iptablesData.String(), "\n") {
 		if strings.HasPrefix(line, fmt.Sprintf("-A %s", kubeHostportChainPrefix)) ||
 			strings.HasPrefix(line, fmt.Sprintf("-A %s", string(kubeHostportsChain))) {
 			existingHostportRules = append(existingHostportRules, line)
@@ -382,8 +382,6 @@ func filterRules(rules []string, filters []utiliptables.Chain) []string {
 // filterChains deletes all entries of filter chains from chain map
 func filterChains(chains map[utiliptables.Chain]string, filterChains []utiliptables.Chain) {
 	for _, chain := range filterChains {
-		if _, ok := chains[chain]; ok {
-			delete(chains, chain)
-		}
+		delete(chains, chain)
 	}
 }

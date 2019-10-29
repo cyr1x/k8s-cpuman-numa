@@ -25,10 +25,10 @@ import (
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/storage"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	k8s_api_v1 "k8s.io/kubernetes/pkg/apis/core/v1"
 	"k8s.io/kubernetes/pkg/kubelet/client"
@@ -88,9 +88,13 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, kubeletClientConfig client
 		DeleteStrategy: node.Strategy,
 		ExportStrategy: node.Strategy,
 
-		TableConvertor: printerstorage.TableConvertor{TablePrinter: printers.NewTablePrinter().With(printersinternal.AddHandlers)},
+		TableConvertor: printerstorage.TableConvertor{TableGenerator: printers.NewTableGenerator().With(printersinternal.AddHandlers)},
 	}
-	options := &generic.StoreOptions{RESTOptions: optsGetter, AttrFunc: node.GetAttrs, TriggerFunc: node.NodeNameTriggerFunc}
+	options := &generic.StoreOptions{
+		RESTOptions: optsGetter,
+		AttrFunc:    node.GetAttrs,
+		TriggerFunc: map[string]storage.IndexerFunc{"metadata.name": node.NameTriggerFunc},
+	}
 	if err := store.CompleteWithOptions(options); err != nil {
 		return nil, err
 	}
@@ -104,8 +108,8 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, kubeletClientConfig client
 	proxyREST := &noderest.ProxyREST{Store: store, ProxyTransport: proxyTransport}
 
 	// Build a NodeGetter that looks up nodes using the REST handler
-	nodeGetter := client.NodeGetterFunc(func(nodeName string, options metav1.GetOptions) (*v1.Node, error) {
-		obj, err := nodeREST.Get(genericapirequest.NewContext(), nodeName, &options)
+	nodeGetter := client.NodeGetterFunc(func(ctx context.Context, nodeName string, options metav1.GetOptions) (*v1.Node, error) {
+		obj, err := nodeREST.Get(ctx, nodeName, &options)
 		if err != nil {
 			return nil, err
 		}
@@ -129,9 +133,9 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, kubeletClientConfig client
 	proxyREST.Connection = connectionInfoGetter
 
 	return &NodeStorage{
-		Node:   nodeREST,
-		Status: statusREST,
-		Proxy:  proxyREST,
+		Node:                  nodeREST,
+		Status:                statusREST,
+		Proxy:                 proxyREST,
 		KubeletConnectionInfo: connectionInfoGetter,
 	}, nil
 }

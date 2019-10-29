@@ -23,6 +23,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 )
 
@@ -36,14 +37,14 @@ func TestEtcdOptionsValidate(t *testing.T) {
 			name: "test when ServerList is not specified",
 			testOptions: &EtcdOptions{
 				StorageConfig: storagebackend.Config{
-					Type:       "etcd2",
-					ServerList: nil,
-					Prefix:     "/registry",
-					DeserializationCacheSize: 0,
-					Quorum:                false,
-					KeyFile:               "/var/run/kubernetes/etcd.key",
-					CAFile:                "/var/run/kubernetes/etcdca.crt",
-					CertFile:              "/var/run/kubernetes/etcdce.crt",
+					Type:   "etcd3",
+					Prefix: "/registry",
+					Transport: storagebackend.TransportConfig{
+						ServerList: nil,
+						KeyFile:    "/var/run/kubernetes/etcd.key",
+						CAFile:     "/var/run/kubernetes/etcdca.crt",
+						CertFile:   "/var/run/kubernetes/etcdce.crt",
+					},
 					CompactionInterval:    storagebackend.DefaultCompactInterval,
 					CountMetricPollPeriod: time.Minute,
 				},
@@ -60,14 +61,14 @@ func TestEtcdOptionsValidate(t *testing.T) {
 			name: "test when storage-backend is invalid",
 			testOptions: &EtcdOptions{
 				StorageConfig: storagebackend.Config{
-					Type:       "etcd4",
-					ServerList: []string{"http://127.0.0.1"},
-					Prefix:     "/registry",
-					DeserializationCacheSize: 0,
-					Quorum:                false,
-					KeyFile:               "/var/run/kubernetes/etcd.key",
-					CAFile:                "/var/run/kubernetes/etcdca.crt",
-					CertFile:              "/var/run/kubernetes/etcdce.crt",
+					Type:   "etcd4",
+					Prefix: "/registry",
+					Transport: storagebackend.TransportConfig{
+						ServerList: []string{"http://127.0.0.1"},
+						KeyFile:    "/var/run/kubernetes/etcd.key",
+						CAFile:     "/var/run/kubernetes/etcdca.crt",
+						CertFile:   "/var/run/kubernetes/etcdce.crt",
+					},
 					CompactionInterval:    storagebackend.DefaultCompactInterval,
 					CountMetricPollPeriod: time.Minute,
 				},
@@ -78,20 +79,20 @@ func TestEtcdOptionsValidate(t *testing.T) {
 				DefaultWatchCacheSize:   100,
 				EtcdServersOverrides:    []string{"/events#http://127.0.0.1:4002"},
 			},
-			expectErr: "--storage-backend invalid, must be 'etcd3' or 'etcd2'. If not specified, it will default to 'etcd3'",
+			expectErr: "--storage-backend invalid, allowed values: etcd3. If not specified, it will default to 'etcd3'",
 		},
 		{
 			name: "test when etcd-servers-overrides is invalid",
 			testOptions: &EtcdOptions{
 				StorageConfig: storagebackend.Config{
-					Type:       "etcd3",
-					ServerList: []string{"http://127.0.0.1"},
-					Prefix:     "/registry",
-					DeserializationCacheSize: 0,
-					Quorum:                false,
-					KeyFile:               "/var/run/kubernetes/etcd.key",
-					CAFile:                "/var/run/kubernetes/etcdca.crt",
-					CertFile:              "/var/run/kubernetes/etcdce.crt",
+					Type: "etcd3",
+					Transport: storagebackend.TransportConfig{
+						ServerList: []string{"http://127.0.0.1"},
+						KeyFile:    "/var/run/kubernetes/etcd.key",
+						CAFile:     "/var/run/kubernetes/etcdca.crt",
+						CertFile:   "/var/run/kubernetes/etcdce.crt",
+					},
+					Prefix:                "/registry",
 					CompactionInterval:    storagebackend.DefaultCompactInterval,
 					CountMetricPollPeriod: time.Minute,
 				},
@@ -108,14 +109,14 @@ func TestEtcdOptionsValidate(t *testing.T) {
 			name: "test when EtcdOptions is valid",
 			testOptions: &EtcdOptions{
 				StorageConfig: storagebackend.Config{
-					Type:       "etcd3",
-					ServerList: []string{"http://127.0.0.1"},
-					Prefix:     "/registry",
-					DeserializationCacheSize: 0,
-					Quorum:                false,
-					KeyFile:               "/var/run/kubernetes/etcd.key",
-					CAFile:                "/var/run/kubernetes/etcdca.crt",
-					CertFile:              "/var/run/kubernetes/etcdce.crt",
+					Type:   "etcd3",
+					Prefix: "/registry",
+					Transport: storagebackend.TransportConfig{
+						ServerList: []string{"http://127.0.0.1"},
+						KeyFile:    "/var/run/kubernetes/etcd.key",
+						CAFile:     "/var/run/kubernetes/etcdca.crt",
+						CertFile:   "/var/run/kubernetes/etcdce.crt",
+					},
 					CompactionInterval:    storagebackend.DefaultCompactInterval,
 					CountMetricPollPeriod: time.Minute,
 				},
@@ -190,6 +191,51 @@ func TestParseWatchCacheSizes(t *testing.T) {
 						}
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestKMSHealthzEndpoint(t *testing.T) {
+	testCases := []struct {
+		name                 string
+		encryptionConfigPath string
+		wantChecks           []string
+	}{
+		{
+			name:                 "single kms-provider, expect single kms healthz check",
+			encryptionConfigPath: "testdata/encryption-configs/single-kms-provider.yaml",
+			wantChecks:           []string{"etcd", "kms-provider-0"},
+		},
+		{
+			name:                 "two kms-providers, expect two kms healthz checks",
+			encryptionConfigPath: "testdata/encryption-configs/multiple-kms-providers.yaml",
+			wantChecks:           []string{"etcd", "kms-provider-0", "kms-provider-1"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			serverConfig := &server.Config{}
+			etcdOptions := &EtcdOptions{
+				EncryptionProviderConfigFilepath: tc.encryptionConfigPath,
+			}
+			if err := etcdOptions.addEtcdHealthEndpoint(serverConfig); err != nil {
+				t.Fatalf("Failed to add healthz error: %v", err)
+			}
+
+			for _, n := range tc.wantChecks {
+				found := false
+				for _, h := range serverConfig.HealthzChecks {
+					if n == h.Name() {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Missing HealthzChecker %s", n)
+				}
+				found = false
 			}
 		})
 	}

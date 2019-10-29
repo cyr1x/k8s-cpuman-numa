@@ -17,17 +17,17 @@ limitations under the License.
 package priorities
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/kubernetes/pkg/features"
 	schedulerapi "k8s.io/kubernetes/pkg/scheduler/api"
-	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
+	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 )
 
 // getExistingVolumeCountForNode gets the current number of volumes on node.
@@ -44,7 +44,7 @@ func getExistingVolumeCountForNode(pods []*v1.Pod, maxVolumes int) int {
 
 func TestBalancedResourceAllocation(t *testing.T) {
 	// Enable volumesOnNodeForBalancing to do balanced resource allocation
-	utilfeature.DefaultFeatureGate.Set(fmt.Sprintf("%s=true", features.BalanceAttachedNodeVolumes))
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.BalanceAttachedNodeVolumes, true)()
 	podwithVol1 := v1.PodSpec{
 		Containers: []v1.Container{
 			{
@@ -401,7 +401,7 @@ func TestBalancedResourceAllocation(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			nodeNameToInfo := schedulercache.CreateNodeNameToInfoMap(test.pods, test.nodes)
+			nodeNameToInfo := schedulernodeinfo.CreateNodeNameToInfoMap(test.pods, test.nodes)
 			if len(test.pod.Spec.Volumes) > 0 {
 				maxVolumes := 5
 				for _, info := range nodeNameToInfo {
@@ -409,13 +409,17 @@ func TestBalancedResourceAllocation(t *testing.T) {
 					info.TransientInfo.TransNodeInfo.RequestedVolumes = len(test.pod.Spec.Volumes)
 				}
 			}
-			list, err := priorityFunction(BalancedResourceAllocationMap, nil, nil)(test.pod, nodeNameToInfo, test.nodes)
+			function := priorityFunction(BalancedResourceAllocationMap, nil, nil)
+
+			list, err := function(test.pod, nodeNameToInfo, test.nodes)
+
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
 			if !reflect.DeepEqual(test.expectedList, list) {
 				t.Errorf("expected %#v, got %#v", test.expectedList, list)
 			}
+
 		})
 	}
 }

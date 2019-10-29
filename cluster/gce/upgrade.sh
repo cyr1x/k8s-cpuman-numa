@@ -33,6 +33,7 @@ source "${KUBE_ROOT}/cluster/kube-util.sh"
 
 function usage() {
   echo "!!! EXPERIMENTAL !!!"
+  echo "!!! This upgrade script is not meant to be run in production !!!"
   echo ""
   echo "${0} [-M | -N | -P] [-o] (-l | <version number or publication>)"
   echo "  Upgrades master and nodes by default"
@@ -210,10 +211,10 @@ function setup-base-image() {
     if [[ "${NODE_OS_DISTRIBUTION}" == "cos" ]]; then
         NODE_OS_DISTRIBUTION="gci"
     fi
-    
+
     source "${KUBE_ROOT}/cluster/gce/${NODE_OS_DISTRIBUTION}/node-helper.sh"
     # Reset the node image based on current os distro
-    set-node-image
+    set-linux-node-image
   fi
 }
 
@@ -263,12 +264,12 @@ function prepare-node-upgrade() {
 
   # TODO(zmerlynn): How do we ensure kube-env is written in a ${version}-
   #                 compatible way?
-  write-node-env
+  write-linux-node-env
 
   # TODO(zmerlynn): Get configure-vm script from ${version}. (Must plumb this
-  #                 through all create-node-instance-template implementations).
-  local template_name=$(get-template-name-from-version ${SANITIZED_VERSION})
-  create-node-instance-template "${template_name}"
+  #                 through all create-linux-node-instance-template implementations).
+  local template_name=$(get-template-name-from-version ${SANITIZED_VERSION} ${NODE_INSTANCE_PREFIX})
+  create-linux-node-instance-template "${template_name}"
   # The following is echo'd so that callers can get the template name.
   echo "Instance template name: ${template_name}"
   echo "== Finished preparing node upgrade (to ${KUBE_VERSION}). ==" >&2
@@ -373,7 +374,7 @@ function do-node-upgrade() {
   # Do the actual upgrade.
   # NOTE(zmerlynn): If you are changing this gcloud command, update
   #                 test/e2e/cluster_upgrade.go to match this EXACTLY.
-  local template_name=$(get-template-name-from-version ${SANITIZED_VERSION})
+  local template_name=$(get-template-name-from-version ${SANITIZED_VERSION} ${NODE_INSTANCE_PREFIX})
   local old_templates=()
   local updates=()
   for group in ${INSTANCE_GROUPS[@]}; do
@@ -438,6 +439,100 @@ function do-node-upgrade() {
 
   echo "== Finished upgrading nodes to ${KUBE_VERSION}. ==" >&2
 }
+
+
+function update-coredns-config() {
+  # Get the current CoreDNS version
+  local -r coredns_addon_path="/etc/kubernetes/addons/0-dns/coredns"
+  local -r tmpdir=/tmp
+  local -r download_dir=$(mktemp --tmpdir=${tmpdir} -d coredns-migration.XXXXXXXXXX) || exit 1
+
+  # clean up
+  cleanup() {
+    rm -rf "${download_dir}"
+  }
+  trap cleanup EXIT
+
+  # Get the new installed CoreDNS version
+  echo "Waiting for CoreDNS to update"
+  until [[ $(${KUBE_ROOT}/cluster/kubectl.sh -n kube-system get deployment coredns -o=jsonpath='{$.metadata.resourceVersion}') -ne ${COREDNS_DEPLOY_RESOURCE_VERSION} ]]; do
+     sleep 1
+  done
+  echo "Fetching the latest installed CoreDNS version"
+  NEW_COREDNS_VERSION=$(${KUBE_ROOT}/cluster/kubectl.sh -n kube-system get deployment coredns -o=jsonpath='{$.spec.template.spec.containers[:1].image}' | cut -d ":" -f 2)
+
+  case "$(uname -m)" in
+      x86_64*)
+        host_arch=amd64
+        corefile_tool_SHA="fd4d8a42d8a1c38cb49b75cca3c7c82677b97c0c6e5ee2a7d5fb02314ccfbb59"
+        ;;
+      i?86_64*)
+        host_arch=amd64
+        corefile_tool_SHA="fd4d8a42d8a1c38cb49b75cca3c7c82677b97c0c6e5ee2a7d5fb02314ccfbb59"
+        ;;
+      amd64*)
+        host_arch=amd64
+        corefile_tool_SHA="fd4d8a42d8a1c38cb49b75cca3c7c82677b97c0c6e5ee2a7d5fb02314ccfbb59"
+        ;;
+      aarch64*)
+        host_arch=arm64
+        corefile_tool_SHA="05503f379eaaa703034c50da7ce7c273d7a7b3569eddb55afe300bd6d6c40988"
+        ;;
+      arm64*)
+        host_arch=arm64
+        corefile_tool_SHA="05503f379eaaa703034c50da7ce7c273d7a7b3569eddb55afe300bd6d6c40988"
+        ;;
+      arm*)
+        host_arch=arm
+        corefile_tool_SHA="bc826bde6662c11cbb6e6e215397d07d4fedb754c1a6e208271d7d784eb28600"
+        ;;
+      s390x*)
+        host_arch=s390x
+        corefile_tool_SHA="4ed6b7067f65dc8f147a4dd116242495fbec5e6057bb68e1868ef1fb25e07993"
+        ;;
+      ppc64le*)
+        host_arch=ppc64le
+         corefile_tool_SHA="7bce38ed762a2607e158c65b378e6f23e2b80fc4e93dcf50a55f986c7ea2db43"
+        ;;
+      *)
+        echo "Unsupported host arch. Must be x86_64, 386, arm, arm64, s390x or ppc64le." >&2
+        exit 1
+        ;;
+    esac
+
+  # Download the CoreDNS migration tool
+  echo "== Downloading the CoreDNS migration tool =="
+  wget -P ${download_dir} "https://github.com/coredns/corefile-migration/releases/download/v1.0.2/corefile-tool-${host_arch}" >/dev/null 2>&1
+
+  local -r checkSHA=$(sha256sum ${download_dir}/corefile-tool-${host_arch} | cut -d " " -f 1)
+  if [[ "${checkSHA}" != "${corefile_tool_SHA}" ]]; then
+    echo "!!! CheckSum for the CoreDNS migration tool did not match !!!" >&2
+    exit 1
+  fi
+
+  chmod +x ${download_dir}/corefile-tool-${host_arch}
+
+  # Migrate the CoreDNS ConfigMap depending on whether it is being downgraded or upgraded.
+  ${KUBE_ROOT}/cluster/kubectl.sh -n kube-system get cm coredns -o jsonpath='{.data.Corefile}' > ${download_dir}/Corefile-old
+
+  if test "$(printf '%s\n' ${CURRENT_COREDNS_VERSION} ${NEW_COREDNS_VERSION} | sort -V | head -n 1)" != ${NEW_COREDNS_VERSION}; then
+     echo "== Upgrading the CoreDNS ConfigMap =="
+     ${download_dir}/corefile-tool-${host_arch} migrate --from ${CURRENT_COREDNS_VERSION} --to ${NEW_COREDNS_VERSION} --corefile ${download_dir}/Corefile-old > ${download_dir}/Corefile
+     ${KUBE_ROOT}/cluster/kubectl.sh -n kube-system create configmap coredns --from-file ${download_dir}/Corefile -o yaml --dry-run | ${KUBE_ROOT}/cluster/kubectl.sh apply -f -
+  else
+     # In case of a downgrade, a custom CoreDNS Corefile will be overwritten by a default Corefile. In that case,
+     # the user will need to manually modify the resulting (default) Corefile after the downgrade is complete.
+     echo "== Applying the latest default CoreDNS configuration =="
+     gcloud compute --project ${PROJECT}  scp --zone ${ZONE} ${MASTER_NAME}:${coredns_addon_path}/coredns.yaml ${download_dir}/coredns-manifest.yaml > /dev/null
+     ${KUBE_ROOT}/cluster/kubectl.sh apply -f ${download_dir}/coredns-manifest.yaml
+  fi
+
+  echo "== The CoreDNS Config has been updated =="
+}
+
+echo "Fetching the previously installed CoreDNS version"
+CURRENT_COREDNS_VERSION=$(${KUBE_ROOT}/cluster/kubectl.sh -n kube-system get deployment coredns -o=jsonpath='{$.spec.template.spec.containers[:1].image}' | cut -d ":" -f 2)
+COREDNS_DEPLOY_RESOURCE_VERSION=$(${KUBE_ROOT}/cluster/kubectl.sh -n kube-system get deployment coredns -o=jsonpath='{$.metadata.resourceVersion}')
 
 master_upgrade=true
 node_upgrade=true
@@ -578,6 +673,10 @@ if [[ "${node_upgrade}" == "true" ]]; then
   else
     upgrade-nodes
   fi
+fi
+
+if [[ "${CLUSTER_DNS_CORE_DNS:-}" == "true" ]]; then
+  update-coredns-config
 fi
 
 echo "== Validating cluster post-upgrade =="

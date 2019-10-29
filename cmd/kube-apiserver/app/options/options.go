@@ -25,15 +25,14 @@ import (
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
-	apiserverflag "k8s.io/apiserver/pkg/util/flag"
+	cliflag "k8s.io/component-base/cli/flag"
 	api "k8s.io/kubernetes/pkg/apis/core"
+	_ "k8s.io/kubernetes/pkg/features" // add the kubernetes feature gates
 	kubeoptions "k8s.io/kubernetes/pkg/kubeapiserver/options"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	"k8s.io/kubernetes/pkg/master/ports"
 	"k8s.io/kubernetes/pkg/master/reconcilers"
-
-	// add the kubernetes feature gates
-	_ "k8s.io/kubernetes/pkg/features"
+	"k8s.io/kubernetes/pkg/serviceaccount"
 )
 
 // ServerRunOptions runs a kubernetes api server.
@@ -48,8 +47,8 @@ type ServerRunOptions struct {
 	Authentication          *kubeoptions.BuiltInAuthenticationOptions
 	Authorization           *kubeoptions.BuiltInAuthorizationOptions
 	CloudProvider           *kubeoptions.CloudProviderOptions
-	StorageSerialization    *kubeoptions.StorageSerializationOptions
 	APIEnablement           *genericoptions.APIEnablementOptions
+	EgressSelector          *genericoptions.EgressSelectorOptions
 
 	AllowPrivileged           bool
 	EnableLogsHandler         bool
@@ -57,10 +56,16 @@ type ServerRunOptions struct {
 	KubeletConfig             kubeletclient.KubeletClientConfig
 	KubernetesServiceNodePort int
 	MaxConnectionBytesPerSec  int64
-	ServiceClusterIPRange     net.IPNet // TODO: make this a list
-	ServiceNodePortRange      utilnet.PortRange
-	SSHKeyfile                string
-	SSHUser                   string
+	// ServiceClusterIPRange is mapped to input provided by user
+	ServiceClusterIPRanges string
+	//PrimaryServiceClusterIPRange and SecondaryServiceClusterIPRange are the results
+	// of parsing ServiceClusterIPRange into actual values
+	PrimaryServiceClusterIPRange   net.IPNet
+	SecondaryServiceClusterIPRange net.IPNet
+
+	ServiceNodePortRange utilnet.PortRange
+	SSHKeyfile           string
+	SSHUser              string
 
 	ProxyClientCertFile string
 	ProxyClientKeyFile  string
@@ -70,24 +75,26 @@ type ServerRunOptions struct {
 	MasterCount            int
 	EndpointReconcilerType string
 
-	ServiceAccountSigningKeyFile string
+	ServiceAccountSigningKeyFile     string
+	ServiceAccountIssuer             serviceaccount.TokenGenerator
+	ServiceAccountTokenMaxExpiration time.Duration
 }
 
 // NewServerRunOptions creates a new ServerRunOptions object with default parameters
 func NewServerRunOptions() *ServerRunOptions {
 	s := ServerRunOptions{
 		GenericServerRunOptions: genericoptions.NewServerRunOptions(),
-		Etcd:                 genericoptions.NewEtcdOptions(storagebackend.NewDefaultConfig(kubeoptions.DefaultEtcdPathPrefix, nil)),
-		SecureServing:        kubeoptions.NewSecureServingOptions(),
-		InsecureServing:      kubeoptions.NewInsecureServingOptions(),
-		Audit:                genericoptions.NewAuditOptions(),
-		Features:             genericoptions.NewFeatureOptions(),
-		Admission:            kubeoptions.NewAdmissionOptions(),
-		Authentication:       kubeoptions.NewBuiltInAuthenticationOptions().WithAll(),
-		Authorization:        kubeoptions.NewBuiltInAuthorizationOptions(),
-		CloudProvider:        kubeoptions.NewCloudProviderOptions(),
-		StorageSerialization: kubeoptions.NewStorageSerializationOptions(),
-		APIEnablement:        genericoptions.NewAPIEnablementOptions(),
+		Etcd:                    genericoptions.NewEtcdOptions(storagebackend.NewDefaultConfig(kubeoptions.DefaultEtcdPathPrefix, nil)),
+		SecureServing:           kubeoptions.NewSecureServingOptions(),
+		InsecureServing:         kubeoptions.NewInsecureServingOptions(),
+		Audit:                   genericoptions.NewAuditOptions(),
+		Features:                genericoptions.NewFeatureOptions(),
+		Admission:               kubeoptions.NewAdmissionOptions(),
+		Authentication:          kubeoptions.NewBuiltInAuthenticationOptions().WithAll(),
+		Authorization:           kubeoptions.NewBuiltInAuthorizationOptions(),
+		CloudProvider:           kubeoptions.NewCloudProviderOptions(),
+		APIEnablement:           genericoptions.NewAPIEnablementOptions(),
+		EgressSelector:          genericoptions.NewEgressSelectorOptions(),
 
 		EnableLogsHandler:      true,
 		EventTTL:               1 * time.Hour,
@@ -108,12 +115,12 @@ func NewServerRunOptions() *ServerRunOptions {
 				string(api.NodeExternalDNS),
 				string(api.NodeExternalIP),
 			},
-			EnableHttps: true,
+			EnableHTTPS: true,
 			HTTPTimeout: time.Duration(5) * time.Second,
 		},
 		ServiceNodePortRange: kubeoptions.DefaultServiceNodePortRange,
 	}
-	s.ServiceClusterIPRange = kubeoptions.DefaultServiceIPCIDR
+	s.ServiceClusterIPRanges = kubeoptions.DefaultServiceIPCIDR.String()
 
 	// Overwrite the default for storage data format.
 	s.Etcd.DefaultStorageMediaType = "application/vnd.kubernetes.protobuf"
@@ -122,7 +129,7 @@ func NewServerRunOptions() *ServerRunOptions {
 }
 
 // Flags returns flags for a specific APIServer by section name
-func (s *ServerRunOptions) Flags() (fss apiserverflag.NamedFlagSets) {
+func (s *ServerRunOptions) Flags() (fss cliflag.NamedFlagSets) {
 	// Add the generic flags.
 	s.GenericServerRunOptions.AddUniversalFlags(fss.FlagSet("generic"))
 	s.Etcd.AddFlags(fss.FlagSet("etcd"))
@@ -134,8 +141,8 @@ func (s *ServerRunOptions) Flags() (fss apiserverflag.NamedFlagSets) {
 	s.Authentication.AddFlags(fss.FlagSet("authentication"))
 	s.Authorization.AddFlags(fss.FlagSet("authorization"))
 	s.CloudProvider.AddFlags(fss.FlagSet("cloud provider"))
-	s.StorageSerialization.AddFlags(fss.FlagSet("storage"))
 	s.APIEnablement.AddFlags(fss.FlagSet("api enablement"))
+	s.EgressSelector.AddFlags(fss.FlagSet("egress selector"))
 	s.Admission.AddFlags(fss.FlagSet("admission"))
 
 	// Note: the weird ""+ in below lines seems to be the only way to get gofmt to
@@ -149,6 +156,7 @@ func (s *ServerRunOptions) Flags() (fss apiserverflag.NamedFlagSets) {
 
 	fs.BoolVar(&s.EnableLogsHandler, "enable-logs-handler", s.EnableLogsHandler,
 		"If true, install a /logs handler for the apiserver logs.")
+	fs.MarkDeprecated("enable-logs-handler", "This flag will be removed in v1.19")
 
 	// Deprecated in release 1.9
 	fs.StringVar(&s.SSHUser, "ssh-user", s.SSHUser,
@@ -177,7 +185,8 @@ func (s *ServerRunOptions) Flags() (fss apiserverflag.NamedFlagSets) {
 		"of type NodePort, using this as the value of the port. If zero, the Kubernetes master "+
 		"service will be of type ClusterIP.")
 
-	fs.IPNetVar(&s.ServiceClusterIPRange, "service-cluster-ip-range", s.ServiceClusterIPRange, ""+
+	// TODO (khenidak) change documentation as we move IPv6DualStack feature from ALPHA to BETA
+	fs.StringVar(&s.ServiceClusterIPRanges, "service-cluster-ip-range", s.ServiceClusterIPRanges, ""+
 		"A CIDR notation IP range from which to assign service cluster IPs. This must not "+
 		"overlap with any IP ranges assigned to nodes for pods.")
 
@@ -186,7 +195,7 @@ func (s *ServerRunOptions) Flags() (fss apiserverflag.NamedFlagSets) {
 		"Example: '30000-32767'. Inclusive at both ends of the range.")
 
 	// Kubelet related flags:
-	fs.BoolVar(&s.KubeletConfig.EnableHttps, "kubelet-https", s.KubeletConfig.EnableHttps,
+	fs.BoolVar(&s.KubeletConfig.EnableHTTPS, "kubelet-https", s.KubeletConfig.EnableHTTPS,
 		"Use https for kubelet connections.")
 
 	fs.StringSliceVar(&s.KubeletConfig.PreferredAddressTypes, "kubelet-preferred-address-types", s.KubeletConfig.PreferredAddressTypes,
@@ -197,7 +206,8 @@ func (s *ServerRunOptions) Flags() (fss apiserverflag.NamedFlagSets) {
 	fs.MarkDeprecated("kubelet-port", "kubelet-port is deprecated and will be removed.")
 
 	fs.UintVar(&s.KubeletConfig.ReadOnlyPort, "kubelet-read-only-port", s.KubeletConfig.ReadOnlyPort,
-		"DEPRECATED: kubelet port.")
+		"DEPRECATED: kubelet read only port.")
+	fs.MarkDeprecated("kubelet-read-only-port", "kubelet-read-only-port is deprecated and will be removed.")
 
 	fs.DurationVar(&s.KubeletConfig.HTTPTimeout, "kubelet-timeout", s.KubeletConfig.HTTPTimeout,
 		"Timeout for kubelet operations.")
@@ -210,11 +220,6 @@ func (s *ServerRunOptions) Flags() (fss apiserverflag.NamedFlagSets) {
 
 	fs.StringVar(&s.KubeletConfig.CAFile, "kubelet-certificate-authority", s.KubeletConfig.CAFile,
 		"Path to a cert file for the certificate authority.")
-
-	// TODO: delete this flag in 1.13
-	repair := false
-	fs.BoolVar(&repair, "repair-malformed-updates", false, "deprecated")
-	fs.MarkDeprecated("repair-malformed-updates", "This flag will be removed in a future version")
 
 	fs.StringVar(&s.ProxyClientCertFile, "proxy-client-cert-file", s.ProxyClientCertFile, ""+
 		"Client certificate used to prove the identity of the aggregator or kube-apiserver "+

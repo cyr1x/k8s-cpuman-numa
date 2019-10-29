@@ -87,23 +87,16 @@ That said, if you have questions, reach out to us
 
 ----
 
-## New "static-numa" policy for the CPU Manager
+## Add CPU Pinning feature in kubernetes v1.16
 
-A new "static-numa" policy is available to prioritize a NUMA node for CPU pinning.
+This feature works with Topology Manager component in order to prioritize a NUMA node for CPU pinning.
 
-### Files modified and added
+### Files modified
 
 Modified files:
  * README.md   (this file)
  * pkg/kubelet/cm/cpumanager/cpu_manager.go
- * pkg/kubelet/cm/cpumanager/cpu_manager_test.go
-
-New files:
- * pkg/kubelet/cm/cpumanager/numa_assignment.go
- * pkg/kubelet/cm/cpumanager/numa_assignment_test.go
- * pkg/kubelet/cm/cpumanager/policy_numa.go
- * pkg/kubelet/cm/cpumanager/policy_numa_test.go
-
+ * pkg/kubelet/cm/cpumanager/topology_hints.go
 
 ### Get the sources
 
@@ -117,6 +110,7 @@ Sources (complete Kubernetes and modifications) are a available in the Orange Fo
  * Branches for the numa cpu pinning:
     * telco_policy   (for 1.9.x)
     * telco_policy_1.12   (for 1.12.3)
+    * telco_policy_1.16   (for 1.16)
 
 TODO: confirm repository URL  
 ```sh

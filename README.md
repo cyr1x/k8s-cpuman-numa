@@ -112,14 +112,6 @@ Sources (complete Kubernetes and modifications) are a available in the Orange Fo
     * telco_policy_1.12   (for 1.12.3)
     * telco_policy_1.16   (for 1.16)
 
-TODO: confirm repository URL  
-```sh
-$ git clone https://gitlab.forge.orange-labs.fr/telco-k8s/k8s-cpuman/
-$ cd kubernetes
-$ git checkout tags/v1.12.3-6_numa
-```
-
-
 ### Execute unit tests
 
 Go to your kubernetes directory and use this command to execute all the test files in the specified directory (here only the cpu manager unit tests):
@@ -130,14 +122,21 @@ $ make check WHAT=./pkg/kubelet/cm/cpumanager GOFLAGS=-v
 
 ### Compile and build Kubernetes (and the new kubelet service)
 
-Tested on a VirtualBox VM with Ubuntu 16.04 and 18.04 (64 bits).
+Tested on a VMWare ESXi VM with CentOS 7.7 (64 bits).
 
 To build kubernetes binary with the same characteristics as your building environment, go to your kubernetes directory and use this command :
 
 ```sh
 $ make quick-release
 ```
-Archives and binaries are stored in the _output directory, for me in ~/kubernetes/_output. And binaries are in ~/kubernetes/_output/dockerized/bin/linux/amd64
+
+To build only one kubernetes binary component with the same characteristics as your building environment, go to your kubernetes directory and use this command :
+
+```sh
+$ make WHAT=cmd/kubelet
+```
+
+Archives and binaries are stored in kubernetes's the _output directory. Thus, binaries are in kubernetes/_output/local/bin/linux/amd64
 
 
 If you need to build binaries for more OS and processors, use this command:
@@ -149,26 +148,29 @@ It's a very long process. You need more than 12 Gb of RAM for parallel compilati
 Binaries are in _output directory.
 
 
-### Deploy new kubelet service on an existing cluster
+### Deploy new kubelet service on an existing cluster (cluster deployed with kubeadm)
 
 #### Manual procedure
 
 On each node (minion):
- 1. Backup kubelet binary /usr/local/bin/kubelet
- 2. Backup kubelet config file /etc/kubernetes/kubelet.env
- 3. Exclude the node from the cluster: from client side with kubectl, use:
+ 1. Backup kubelet binary /usr/bin/kubelet
+ 2. Exclude the node from the cluster: from client side with kubectl, use:
 ``` sh
 $ kubectl drain node_name --ignore-daemonsets      (other option: --delete-local-data)
 ```
- 4. Stop kubelet service:
+ 3. Stop kubelet service:
 ``` sh
 $ sudo systemctl stop kubelet
 ```
- 5. Replace /usr/local/bin/kubelet  file with the numa version
- 6. In /etc/kubernetes/kubelet.env  change --cpu-manager-policy parameter to "static-numa" , or add this line in the KUBELET_ARGS parameters:
-```
---cpu-manager-policy=static-numa \
-```
+ 4. Remove cpu_manager_state file
+ 5. Replace /usr/bin/kubelet file with the numa version generated
+ 6. In /var/lib/kubelet/config.yaml file, change cpuManagerPolicy parameter to "static", active topologymanager and reserve resources (for cpumanager) by appending lines :
+ ``` yaml
+ featureGates:
+  TopologyManager: true
+ kubeReserved:
+  cpu: 500m
+ ```
  7. Start kubelet service:
 ``` sh
 $ sudo systemctl start kubelet
@@ -178,7 +180,18 @@ $ sudo systemctl start kubelet
 $ kubectl uncordon node_name
 $ kubectl get nodes
 ```
-The node version must be "v1.12.3-6_numa" and his status "Ready".
+The node version must be "v1.16" and his status "Ready".
+
+#### Check NUMA Node works
+
+ 1. Getting Container ID (first column) on the node by running :
+``` sh
+$ docker ps
+```
+ 2. Getting in which processor the process is assigned to :
+ ``` sh
+ $ ps -o pid,psr,cmd $(docker inspect --format '{{.State.Pid}}' ContainerID)
+ ```
 
 #### Ansible procedure
 
@@ -196,9 +209,9 @@ Actually this template is a "standard" template for K8s kubelet v1.9.5. You need
 
 
 
-### How to use static-numa policy in a pod?
+### How to use numa in a pod?
 
-You must add an annotation "PreferredNUMANodeId" specifying the CPU index (or NUMA node) on which you want the pod to run. Index starts at 0.
+You must add an annotation "PreferredNUMANodeId" specifying the CPU index (or NUMA node) on which you want the pod to run and use class of service Guaranteed. Index starts at 0.
 
 For example:
 ```yaml
@@ -215,6 +228,9 @@ spec:
     name: exclusive-2-s1
     resources:
       limits:
+        cpu: 2
+        memory: "256M"
+      requests:
         cpu: 2
         memory: "256M"
 ```

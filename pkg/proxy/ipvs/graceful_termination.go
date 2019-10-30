@@ -22,8 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"fmt"
-	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog"
 	utilipvs "k8s.io/kubernetes/pkg/util/ipvs"

@@ -985,9 +985,6 @@ func (dsc *DaemonSetsController) manage(ds *apps.DaemonSet, nodeList []*v1.Node,
 	return nil
 }
 
-// matchFieldVersion is the minimum version of kubelet that can run pods using MatchField affinity selectors
-var matchFieldVersion = utilversion.MustParseSemantic("v1.11.0")
-
 // syncNodes deletes given pods and creates new daemon set pods on the given nodes
 // returns slice with erros if any
 func (dsc *DaemonSetsController) syncNodes(ds *apps.DaemonSet, podsToDelete, nodesNeedingDaemonPods []string, hash string) error {

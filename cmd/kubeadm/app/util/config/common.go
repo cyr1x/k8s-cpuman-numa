@@ -81,17 +81,6 @@ func validateSupportedVersion(gv schema.GroupVersion, allowDeprecated bool) erro
 // NormalizeKubernetesVersion resolves version labels, sets alternative
 // image registry if requested for CI builds, and validates minimal
 // version that kubeadm SetInitDynamicDefaultssupports.
-
-	if _, present := deprecatedAPIVersions[gvString]; present && !allowDeprecated {
-		return errors.Errorf("your configuration file uses a deprecated API spec: %q. Please use 'kubeadm config migrate --old-config old.yaml --new-config new.yaml', which will write the new, similar spec using a newer API version.", gv.String())
-	}
-
-	return nil
-}
-
-// NormalizeKubernetesVersion resolves version labels, sets alternative
-// image registry if requested for CI builds, and validates minimal
-// version that kubeadm SetInitDynamicDefaultssupports.
 func NormalizeKubernetesVersion(cfg *kubeadmapi.ClusterConfiguration) error {
 	// Requested version is automatic CI build, thus use KubernetesCI Image Repository for core images
 	if kubeadmutil.KubernetesIsCIVersion(cfg.KubernetesVersion) {

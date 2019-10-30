@@ -43,7 +43,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/kubernetes/pkg/controller/disruption"
 	"k8s.io/kubernetes/test/integration/framework"
-	"reflect"
 )
 
 const (

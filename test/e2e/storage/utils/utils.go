@@ -62,11 +62,6 @@ const (
 	podSecurityPolicyPrivilegedClusterRoleName = "e2e-test-privileged-psp"
 )
 
-const (
-	// ClusterRole name for e2e test Priveledged Pod Security Policy User
-	podSecurityPolicyPrivilegedClusterRoleName = "e2e-test-privileged-psp"
-)
-
 // PodExec wraps RunKubectl to execute a bash cmd in target pod
 func PodExec(pod *v1.Pod, bashExec string) (string, error) {
 	return framework.RunKubectl("exec", fmt.Sprintf("--namespace=%s", pod.Namespace), pod.Name, "--", "/bin/sh", "-c", bashExec)

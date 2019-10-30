@@ -280,8 +280,6 @@ func newNode(name string, label map[string]string) *v1.Node {
 		Status: v1.NodeStatus{
 			Conditions:  []v1.NodeCondition{{Type: v1.NodeReady, Status: v1.ConditionTrue}},
 			Allocatable: v1.ResourceList{v1.ResourcePods: resource.MustParse("100")},
-			// minimum version required to use matchFields
-			NodeInfo: v1.NodeSystemInfo{KubeletVersion: "v1.11.0"},
 		},
 	}
 }
